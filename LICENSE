@@ -1,0 +1,61 @@
+Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+
+Copyright (c) 2025-2026 ArticuLab, INRIA
+
+This work is licensed under the Creative Commons
+Attribution-NonCommercial-ShareAlike 4.0 International License.
+
+You are free to:
+  - Share: copy and redistribute the material in any medium or format
+  - Adapt: remix, transform, and build upon the material
+
+Under the following terms:
+  - Attribution: You must give appropriate credit, provide a link to
+    the license, and indicate if changes were made.
+  - NonCommercial: You may not use the material for commercial purposes.
+  - ShareAlike: If you remix, transform, or build upon the material, you
+    must distribute your contributions under the same license.
+
+Full license text: https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode
+
+---
+
+THIRD-PARTY MODEL LICENSES
+
+This software integrates or depends on components with their own licenses.
+Users must independently agree to the following terms:
+
+  SMPL-X, MANO body models:
+    https://smpl-x.is.tue.mpg.de/modellicense.html
+    Non-commercial scientific research only (Max Planck Society)
+
+  FLAME face model:
+    https://flame.is.tue.mpg.de/modellicense.html
+
+  MICA face encoder:
+    Non-commercial research only (Max Planck Society)
+
+  GVHMR (body pose estimation):
+    Non-commercial, derivatives must remain open-source
+    https://github.com/zju3dv/GVHMR
+
+  EMICA / Inferno (face reconstruction):
+    Non-commercial scientific research only
+    https://github.com/radekd91/inferno
+
+  InsightFace / antelopev2 (face detection weights):
+    Non-commercial for pretrained models
+    https://www.insightface.ai
+
+  nvdiffrast (differentiable rasterizer):
+    NVIDIA Source Code License (non-commercial)
+    https://github.com/NVlabs/nvdiffrast
+
+  Ultralytics YOLO (person tracking):
+    AGPL-3.0 (used as a dependency, not modified or redistributed)
+    https://www.ultralytics.com/license
+
+  HaMeR: MIT License
+  ViTPose: Apache 2.0
+  L2CS-Net: MIT License
+  PyTorch3D: BSD License

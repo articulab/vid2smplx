@@ -1,0 +1,39 @@
+# Models (downloaded separately)
+models/*/
+!models/README.md
+!models/.gitkeep
+mano_v1_2/
+
+# Output
+output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Unused repos
+haptic/
+
+# Conda/venv
+.conda/
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Trimmed videos
+.trimmed/
+
+# Test artifacts
+test_render/
+
