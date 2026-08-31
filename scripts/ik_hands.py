@@ -28,7 +28,9 @@ def solve_ik(model: torch.nn.Module, smplx_params: dict[str, torch.Tensor], dc_w
     """
     device = "cuda"
     L = smplx_params["body_pose"].shape[0]
-    IK_CHUNK = 2048
+    # ponytail: measured ~3 MB/frame of activations per chunk (docs/benchmarks.md); size chunks to free VRAM.
+    free_mb = torch.cuda.mem_get_info()[0] // 2**20 if torch.cuda.is_available() else 0
+    IK_CHUNK = int(min(2048, max(64, free_mb // 6))) if free_mb else 2048
 
     # Build target tensors (full L)
     target_wrist_l = torch.zeros(L, 3, device=device)

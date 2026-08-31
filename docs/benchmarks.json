@@ -1,0 +1,156 @@
+{
+ "gpu": "NVIDIA RTX PRO 1000 Blackwell Generation Laptop GPU, 8151 MiB",
+ "video": "examples/clip_talking.mp4",
+ "runs": [
+  {
+   "percent": 10,
+   "frames": 39,
+   "total_sec": 157,
+   "returncode": 0,
+   "stages": [
+    {
+     "stage": "1 GVHMR",
+     "sec": 44.0,
+     "peak_vram_mb": 4500,
+     "mean_util": 20
+    },
+    {
+     "stage": "2 Hand",
+     "sec": 62.6,
+     "peak_vram_mb": 4497,
+     "mean_util": 10
+    },
+    {
+     "stage": "3 FLAME",
+     "sec": 28.0,
+     "peak_vram_mb": 2045,
+     "mean_util": 3
+    },
+    {
+     "stage": "3.5 Gaze",
+     "sec": 6.4,
+     "peak_vram_mb": 2329,
+     "mean_util": 2
+    },
+    {
+     "stage": "4 Merge",
+     "sec": 1.8,
+     "peak_vram_mb": 1,
+     "mean_util": 1
+    },
+    {
+     "stage": "4.5 IK",
+     "sec": 10.6,
+     "peak_vram_mb": 341,
+     "mean_util": 36
+    },
+    {
+     "stage": "5 Render",
+     "sec": 0.4,
+     "peak_vram_mb": 1,
+     "mean_util": 1
+    }
+   ]
+  },
+  {
+   "percent": 40,
+   "frames": 150,
+   "total_sec": 230,
+   "returncode": 0,
+   "stages": [
+    {
+     "stage": "1 GVHMR",
+     "sec": 70.5,
+     "peak_vram_mb": 4468,
+     "mean_util": 41
+    },
+    {
+     "stage": "2 Hand",
+     "sec": 95.6,
+     "peak_vram_mb": 5071,
+     "mean_util": 21
+    },
+    {
+     "stage": "3 FLAME",
+     "sec": 29.6,
+     "peak_vram_mb": 4761,
+     "mean_util": 6
+    },
+    {
+     "stage": "3.5 Gaze",
+     "sec": 10.9,
+     "peak_vram_mb": 3620,
+     "mean_util": 11
+    },
+    {
+     "stage": "4 Merge",
+     "sec": 1.6,
+     "peak_vram_mb": 0,
+     "mean_util": 1
+    },
+    {
+     "stage": "4.5 IK",
+     "sec": 19.0,
+     "peak_vram_mb": 592,
+     "mean_util": 67
+    },
+    {
+     "stage": "5 Render",
+     "sec": 0.2,
+     "peak_vram_mb": 0,
+     "mean_util": 1
+    }
+   ]
+  },
+  {
+   "percent": 100,
+   "frames": 369,
+   "total_sec": 408,
+   "returncode": 0,
+   "stages": [
+    {
+     "stage": "1 GVHMR",
+     "sec": 122.9,
+     "peak_vram_mb": 4468,
+     "mean_util": 54
+    },
+    {
+     "stage": "2 Hand",
+     "sec": 167.2,
+     "peak_vram_mb": 5073,
+     "mean_util": 29
+    },
+    {
+     "stage": "3 FLAME",
+     "sec": 59.1,
+     "peak_vram_mb": 4763,
+     "mean_util": 8
+    },
+    {
+     "stage": "3.5 Gaze",
+     "sec": 17.5,
+     "peak_vram_mb": 3618,
+     "mean_util": 17
+    },
+    {
+     "stage": "4 Merge",
+     "sec": 1.9,
+     "peak_vram_mb": 0,
+     "mean_util": 1
+    },
+    {
+     "stage": "4.5 IK",
+     "sec": 36.3,
+     "peak_vram_mb": 1122,
+     "mean_util": 84
+    },
+    {
+     "stage": "5 Render",
+     "sec": 0.4,
+     "peak_vram_mb": 1119,
+     "mean_util": 1
+    }
+   ]
+  }
+ ]
+}
