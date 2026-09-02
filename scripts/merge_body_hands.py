@@ -234,7 +234,9 @@ def merge(gvhmr_path: Path | str, hamer_params_dir: Path | str | None, output_pa
         print(f"  HaMeR: skipped (no hand params provided)")
 
     relaxed_pose = load_mano_mean_hand_pose()
-    left_hand_pose = np.tile(relaxed_pose, (num_frames, 1))
+    # MANO's mean pose is right-handed; mirror for the left (aa pseudovector: negate y,z)
+    relaxed_left = (relaxed_pose.reshape(15, 3) * [1, -1, -1]).flatten().astype(np.float32)
+    left_hand_pose = np.tile(relaxed_left, (num_frames, 1))
     right_hand_pose = np.tile(relaxed_pose, (num_frames, 1))
     left_hand_valid = np.zeros(num_frames, dtype=bool)
     right_hand_valid = np.zeros(num_frames, dtype=bool)
@@ -278,7 +280,7 @@ def merge(gvhmr_path: Path | str, hamer_params_dir: Path | str | None, output_pa
 
     # SLERP gap interpolation
     if left_count > 0:
-        left_hand_pose = interpolate_hand_gaps(left_hand_pose, left_hand_valid, relaxed_pose)
+        left_hand_pose = interpolate_hand_gaps(left_hand_pose, left_hand_valid, relaxed_left)
     if right_count > 0:
         right_hand_pose = interpolate_hand_gaps(right_hand_pose, right_hand_valid, relaxed_pose)
 
