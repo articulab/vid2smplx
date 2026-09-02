@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -254,6 +255,94 @@ def main(argv: list[str] | None = None) -> None:
         if not doctor(check_env=False, skip=skip):
             sys.exit(1)
     cmd_run(args)
+
+
+MIN_COVERAGE = {"hands": 0.30, "face": 0.20, "gaze": 0.20}
+
+
+def hamer_detection_count(hamer_pt: Path) -> int | None:
+    """How many hand instances HaMeR actually reconstructed.
+
+    Returns None if the file is absent, which means HaMeR *failed* rather than
+    "found nothing" — the two are indistinguishable from coverage alone, and only
+    the first is a bug. An empty-but-present file means the detector genuinely saw
+    no hands (subject occluded / out of frame), which is fine.
+    """
+    if not hamer_pt.exists():
+        return None
+    try:
+        import torch as _t
+        d = _t.load(hamer_pt, map_location="cpu", weights_only=False)
+        return int(len(d.get("frame_idx", [])))
+    except Exception:
+        return None
+
+
+def quality_report(npz_path: Path, timings: dict, n_hand_det: int | None = None) -> dict:
+    """Inspect the produced params and decide whether this clip is actually usable.
+
+    Returns a dict written to summary.json; `failures` being non-empty means the
+    run must not be marked SUCCESS.
+    """
+    import numpy as np
+
+    qc: dict = {"timings_s": dict(timings), "warnings": [], "failures": []}
+
+    if not npz_path.exists():
+        qc["failures"].append(f"no params written at {npz_path}")
+        return qc
+
+    qc["npz_mb"] = round(npz_path.stat().st_size / 1e6, 1)
+    try:
+        z = np.load(npz_path, allow_pickle=True)
+    except Exception as e:  # truncated / corrupt archive
+        qc["failures"].append(f"params unreadable: {type(e).__name__}: {e}")
+        return qc
+
+    qc["frames"] = int(z["num_frames"]) if "num_frames" in z else 0
+    cov = {
+        "hands_left": "left_hand_valid", "hands_right": "right_hand_valid",
+        "face": "face_valid", "gaze": "gaze_valid",
+    }
+    for label, key in cov.items():
+        qc[label] = float(z[key].mean()) if key in z else 0.0
+    if "ik_coverage" in z:
+        qc["ik_coverage"] = float(z["ik_coverage"])
+
+    # Low hand coverage has two causes and only one is a bug:
+    #
+    #   HaMeR failed to run   -> its output file is absent. Whatever the hands were
+    #                            doing, we lost them. This is the 59-clip disaster.
+    #   Hands not visible     -> file present, few or no detections. The merge fills
+    #                            those frames with the MANO mean pose + SLERP, which
+    #                            is a fine stand-in, and *_hand_valid records exactly
+    #                            which frames were measured. Not a failure.
+    #
+    # Coverage alone cannot separate these, so we key on HaMeR's own output.
+    qc["hand_detections"] = n_hand_det
+    if n_hand_det is None:
+        qc["failures"].append(
+            "HaMeR produced no output file — hand stage failed "
+            "(distinct from 'hands not visible', which yields an empty result)")
+    else:
+        for side in ("hands_left", "hands_right"):
+            if qc[side] < MIN_COVERAGE["hands"]:
+                qc["warnings"].append(
+                    f"{side} coverage {qc[side]:.1%} — hands mostly not visible, pose is "
+                    f"fallback/interpolated; filter on {side.replace('hands_', '')}_hand_valid")
+    for label in ("face", "gaze"):
+        if qc[label] < MIN_COVERAGE[label]:
+            qc["warnings"].append(f"{label} coverage {qc[label]:.1%} is low")
+
+    # IK absent entirely means the stage crashed (e.g. a missing model file) and the
+    # arms are raw GVHMR — the hand-to-body alignment never happened. That is a
+    # failure, not a missing nicety, and "key absent" must not read as "fine".
+    if "ik_coverage" not in qc:
+        qc["failures"].append("ik_coverage absent — IK stage did not complete")
+    elif qc["ik_coverage"] < 0.5:
+        qc["warnings"].append(f"IK coverage {qc['ik_coverage']:.1%} is low")
+
+    return qc
 
 
 def cmd_run(args) -> None:
@@ -593,6 +682,31 @@ def cmd_run(args) -> None:
         print(f"  [OK] Rendered: {render_out}")
 
     timer.end("render")
+
+    # ---- Quality gates -------------------------------------------------
+    # Every silent failure this pipeline produced looked like success: HaMeR dying
+    # still wrote a params file (with zero hands). Coverage is checked against the
+    # artifact, not the exit code.
+    qc = quality_report(smplx_out, timer.timings,
+                        n_hand_det=hamer_detection_count(hamer_params_pt))
+    (output_dir / "summary.json").write_text(json.dumps(qc, indent=2))
+
+    print("\n" + "=" * 44)
+    print("  QUALITY")
+    print("=" * 44)
+    for k in ("frames", "hands_left", "hands_right", "face", "gaze", "ik_coverage", "npz_mb"):
+        if k in qc and qc[k] is not None:
+            v = qc[k]
+            print(f"  {k + ':':16s}{v:.1%}" if isinstance(v, float) and v <= 1.0
+                  else f"  {k + ':':16s}{v}")
+    for w in qc["warnings"]:
+        print(f"  [WARN] {w}")
+    if qc["failures"]:
+        for f in qc["failures"]:
+            print(f"  [FAIL] {f}")
+        (output_dir / "FAILED").write_text("\n".join(qc["failures"]) + "\n")
+        print("\n  Wrote FAILED marker — output is NOT usable.")
+        sys.exit(2)
 
     (output_dir / "SUCCESS").write_text("SUCCESS\n")
 

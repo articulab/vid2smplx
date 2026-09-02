@@ -26,15 +26,23 @@ from utils import LEFT_EYE_EAR, RIGHT_EYE_EAR, crop_face
 # Blink: Eye Aspect Ratio via MediaPipe
 # ---------------------------------------------------------------------------
 
-def compute_ear(landmarks: object, indices: list[int], w: int, h: int) -> float:
-    """Compute Eye Aspect Ratio from 6 landmarks.
+def landmarks_to_px(landmarks: object, sx: float, sy: float,
+                    ox: float = 0.0, oy: float = 0.0) -> np.ndarray:
+    """MediaPipe normalized landmarks -> (N, 2) full-frame pixel coords.
+
+    (sx, sy) is the size of whatever image was fed to FaceMesh and (ox, oy) its
+    origin in the full frame, so ROI and full-frame results share one space.
+    """
+    return np.array([[l.x * sx + ox, l.y * sy + oy] for l in landmarks.landmark],
+                    dtype=np.float32)
+
+
+def compute_ear(pts_px: np.ndarray, indices: list[int]) -> float:
+    """Compute Eye Aspect Ratio from 6 landmarks given in full-frame pixels.
 
     EAR = (||p2-p6|| + ||p3-p5||) / (2 * ||p1-p4||)
     """
-    pts = np.array([
-        [landmarks.landmark[i].x * w, landmarks.landmark[i].y * h]
-        for i in indices
-    ], dtype=np.float32)
+    pts = pts_px[indices]
 
     v1 = np.linalg.norm(pts[1] - pts[5])
     v2 = np.linalg.norm(pts[2] - pts[4])
@@ -43,6 +51,24 @@ def compute_ear(landmarks: object, indices: list[int], w: int, h: int) -> float:
     if horiz < 1e-6:
         return 0.0
     return float((v1 + v2) / (2.0 * horiz))
+
+
+# FaceMesh cost scales with input pixels. EMICA has already localized the face,
+# so feed it a small ROI instead of the full 1080x1920 frame.
+ROI_SCALE = 1.8    # context around the bbox — FaceMesh needs margin to lock on
+ROI_MIN_PX = 192
+
+
+def roi_from_bbox(bbox, w: int, h: int):
+    """Square, frame-clamped ROI around a face bbox. None if degenerate."""
+    x0, y0, x1, y1 = bbox
+    cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+    side = max(max(x1 - x0, y1 - y0) * ROI_SCALE, ROI_MIN_PX)
+    rx0, ry0 = int(max(0, cx - side / 2)), int(max(0, cy - side / 2))
+    rx1, ry1 = int(min(w, cx + side / 2)), int(min(h, cy + side / 2))
+    if rx1 - rx0 < 16 or ry1 - ry0 < 16:
+        return None
+    return rx0, ry0, rx1, ry1
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +218,8 @@ def main() -> None:
     batch_buffer = []
     batch_frame_ids = []
     n_crops = 0
+    n_roi = 0         # frames where the cheap EMICA-ROI FaceMesh pass succeeded
+    n_fullframe = 0   # frames that fell back to full-frame FaceMesh
     bs = args.batch_size
 
     for frame_idx in tqdm(range(total_frames), desc="Read + Blink + Gaze"):
@@ -202,24 +230,40 @@ def main() -> None:
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w = frame_rgb.shape[:2]
 
-        mp_results = face_mesh.process(frame_rgb)
-        if mp_results.multi_face_landmarks:
-            lm = mp_results.multi_face_landmarks[0]
-            blink_lefts[frame_idx] = compute_ear(lm, LEFT_EYE_EAR, w, h)
-            blink_rights[frame_idx] = compute_ear(lm, RIGHT_EYE_EAR, w, h)
+        # Fast path: run FaceMesh on the EMICA ROI. Landmarks come back in
+        # full-frame pixels, so EAR is identical to the full-frame result.
+        pts_px = None
+        roi = (roi_from_bbox(emica_bbox_map[frame_idx], w, h)
+               if frame_idx in emica_bbox_map else None)
+        if roi is not None:
+            rx0, ry0, rx1, ry1 = roi
+            sub = np.ascontiguousarray(frame_rgb[ry0:ry1, rx0:rx1])
+            roi_res = face_mesh.process(sub)
+            if roi_res.multi_face_landmarks:
+                pts_px = landmarks_to_px(roi_res.multi_face_landmarks[0],
+                                         rx1 - rx0, ry1 - ry0, rx0, ry0)
+                n_roi += 1
+
+        if pts_px is None:  # fallback: full frame — same behaviour as before
+            mp_results = face_mesh.process(frame_rgb)
+            if mp_results.multi_face_landmarks:
+                pts_px = landmarks_to_px(mp_results.multi_face_landmarks[0], w, h)
+            n_fullframe += 1
+
+        if pts_px is not None:
+            blink_lefts[frame_idx] = compute_ear(pts_px, LEFT_EYE_EAR)
+            blink_rights[frame_idx] = compute_ear(pts_px, RIGHT_EYE_EAR)
             valid_mask[frame_idx] = True
 
         bbox = None
         if frame_idx in emica_bbox_map:
             bbox = emica_bbox_map[frame_idx]
-        elif mp_results.multi_face_landmarks:
-            lm = mp_results.multi_face_landmarks[0]
-            xs = [lm.landmark[i].x * w for i in range(len(lm.landmark))]
-            ys = [lm.landmark[i].y * h for i in range(len(lm.landmark))]
+        elif pts_px is not None:
             margin = 0.15
-            bw, bh = max(xs) - min(xs), max(ys) - min(ys)
-            bbox = [min(xs) - bw * margin, min(ys) - bh * margin,
-                    max(xs) + bw * margin, max(ys) + bh * margin]
+            (x0, y0), (x1, y1) = pts_px.min(0), pts_px.max(0)
+            bw, bh = x1 - x0, y1 - y0
+            bbox = [x0 - bw * margin, y0 - bh * margin,
+                    x1 + bw * margin, y1 + bh * margin]
         elif mp_face_det is not None:
             det_results = mp_face_det.process(frame_rgb)
             if det_results.detections:
@@ -255,6 +299,7 @@ def main() -> None:
         mp_face_det.close()
 
     print(f"  Read + blink + gaze: {time.time() - t_read:.1f}s ({n_crops} face crops)")
+    print(f"  FaceMesh: {n_roi} on EMICA ROI (fast), {n_fullframe} full-frame (fallback)")
 
     # Build output
     valid_indices = np.where(valid_mask)[0]
