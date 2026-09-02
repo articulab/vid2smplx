@@ -6,6 +6,7 @@ video helpers, MANO/face utilities, renderer selection, and shared constants.
 from __future__ import annotations
 
 import json
+import os
 import pickle
 import subprocess
 from pathlib import Path
@@ -15,6 +16,22 @@ import io
 import cv2
 import numpy as np
 import torch
+
+
+def seed_everything(seed: int) -> None:
+    """Fix every RNG we control. GPU kernels are still not bit-exact; compare with a tolerance."""
+    import random
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
+# ponytail: every pipeline script imports utils, so this one hook seeds them all when `vid2smplx run --seed N`.
+if os.environ.get("VID2SMPLX_SEED"):
+    seed_everything(int(os.environ["VID2SMPLX_SEED"]))
 
 
 def torch_load_buffered(path: str | Path, **kwargs) -> dict:

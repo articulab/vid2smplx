@@ -37,3 +37,7 @@ Thumbs.db
 # Test artifacts
 test_render/
 
+
+# Functional test outputs
+tests/functional/out/
+models/.downloads/

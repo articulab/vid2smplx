@@ -1,20 +1,9 @@
-#!/usr/bin/env python3
-"""vid2smplx — End-to-end: video -> SMPL-X params + rendered video.
+"""vid2smplx command line.
 
-Usage:
-    python scripts/process_video.py <video.mp4> [options]
-
-Options:
-    --percent N         Process only first N% of video (testing)
-    --downsample N      Take every Nth frame for hands (default: 1)
-    --batch_size N      HaMeR batch size (default: 48)
-    --dynamic_cam       Use visual odometry (default: static)
-    --full_debug        Render all debug MP4s
-    --final_incam       Render only the final combined incam video
-    --output_dir DIR    Custom output directory
-    --no_hands          Skip hand estimation
-    --no_face           Skip face, gaze, and blink
-    --cleanup           Delete intermediates after success
+    vid2smplx run <video.mp4> [options]   # video -> smplx_params.npz (+ renders)
+    vid2smplx render <clip_dir> [...]     # re-render an existing output dir
+    vid2smplx doctor                      # check env, weights, symlinks
+    vid2smplx download                    # fetch auto-downloadable weights + create symlinks
 """
 from __future__ import annotations
 
@@ -24,10 +13,11 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
-import torch
+from .checks import in_env
 
 CONDA_ENV = os.environ.get("CONDA_ENV", "vid2smplx")
 
@@ -47,18 +37,30 @@ NOISE_PATTERNS = re.compile(
 
 
 def run(cmd: list[str], cwd: str | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
-    """Run a command, filtering noise from stdout. Stderr passes through for tqdm progress."""
-    result = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, text=True)
-    for line in result.stdout.splitlines():
+    """Run a command, streaming its stdout line by line with noise filtered. Stderr passes through for tqdm."""
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    proc = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, text=True, env=env)
+    lines = []
+    for line in proc.stdout:
+        lines.append(line)
         if not NOISE_PATTERNS.search(line):
-            print(line)
-    if check and result.returncode != 0:
-        raise subprocess.CalledProcessError(result.returncode, cmd)
-    return result
+            print(line, end="", flush=True)
+    proc.wait()
+    if check and proc.returncode != 0:
+        raise subprocess.CalledProcessError(proc.returncode, cmd)
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout="".join(lines), stderr=None)
 
 
 def conda_run(cmd: list[str], cwd: str | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
-    """Run a command inside the conda environment."""
+    """Run a command inside the pipeline environment.
+
+    If we are already inside it (conda activate / .venv), run directly with this interpreter;
+    otherwise wrap with `conda run -n $CONDA_ENV`.
+    """
+    if in_env():
+        if cmd and cmd[0] == "python":
+            cmd = [sys.executable] + cmd[1:]
+        return run(cmd, cwd=cwd, check=check)
     return run(["conda", "run", "-n", CONDA_ENV, "--no-capture-output"] + cmd,
                cwd=cwd, check=check)
 
@@ -74,19 +76,52 @@ def ffprobe_field(video: str, field: str) -> str:
     return val
 
 
+def _nvsmi() -> tuple[int, int] | None:
+    try:
+        out = subprocess.check_output(["nvidia-smi", "--query-gpu=memory.used,utilization.gpu",
+                                       "--format=csv,noheader,nounits"], text=True, timeout=2)
+        used, util = out.strip().splitlines()[0].split(",")
+        return int(used), int(util)
+    except Exception:
+        return None
+
+
 class Timer:
+    """Per-stage wall time + GPU peak memory / mean utilization (sampled from nvidia-smi every second)."""
+    UNDERUTIL = 40  # % — below this the stage is CPU/IO-bound, not GPU-bound
+
     def __init__(self):
         self.timings = {}
         self._starts = {}
         self.total_start = time.time()
+        self._samples: list[tuple[int, int]] = []
+        self._stop = None
+
+    def _sample(self):
+        while not self._stop.is_set():
+            s = _nvsmi()
+            if s:
+                self._samples.append(s)
+            self._stop.wait(1.0)
 
     def start(self, name):
         self._starts[name] = time.time()
+        self._samples = []
+        self._stop = threading.Event()
+        threading.Thread(target=self._sample, daemon=True).start()
 
     def end(self, name):
         elapsed = int(time.time() - self._starts[name])
         self.timings[name] = elapsed
-        print(f"  [TIMER] {name}: {elapsed}s")
+        self._stop.set()
+        line = f"  [TIMER] {name}: {elapsed}s"
+        if self._samples and elapsed >= 5:
+            peak = max(u for u, _ in self._samples)
+            util = sum(v for _, v in self._samples) / len(self._samples)
+            line += f"  [GPU] peak {peak / 1024:.1f} GB, util {util:.0f}%"
+            if util < self.UNDERUTIL:
+                line += " — GPU underutilized (CPU/IO-bound or small workload); a bigger batch size will not help"
+        print(line)
 
     def total(self):
         return int(time.time() - self.total_start)
@@ -97,42 +132,142 @@ def dir_has_files(path):
     return p.is_dir() and any(p.iterdir())
 
 
-def _extract_focal(gvhmr_result):
-    """Extract focal length from GVHMR result .pt file."""
-    pred = torch.load(str(gvhmr_result), map_location="cpu", weights_only=False)
-    return str(float(pred["K_fullimg"][0][0][0]))
+def _extract_focal(gvhmr_result) -> str:
+    """Extract focal length from GVHMR result .pt file (inside the env — the orchestrator may lack torch)."""
+    code = ("import sys,torch;"
+            "print(float(torch.load(sys.argv[1],map_location='cpu',weights_only=False)['K_fullimg'][0][0][0]))")
+    cmd = ["python", "-c", code, str(gvhmr_result)]
+    if not in_env():
+        cmd = ["conda", "run", "-n", CONDA_ENV, "--no-capture-output"] + cmd
+    else:
+        cmd[0] = sys.executable
+    return subprocess.check_output(cmd, text=True).strip().splitlines()[-1]
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="vid2smplx - Video -> SMPL-X Parameters")
-    parser.add_argument("video", help="Path to input video")
-    parser.add_argument("--percent", type=int, default=100)
-    parser.add_argument("--downsample", type=int, default=1)
-    parser.add_argument("--batch_size", type=int, default=48)
-    parser.add_argument("--dynamic_cam", action="store_true")
-    parser.add_argument("--output_dir", default="")
-    parser.add_argument("--hand_detector", default="vitpose")
-    parser.add_argument("--face_method", default="emica")
-    parser.add_argument("--no_face", action="store_true")
-    parser.add_argument("--full_debug", action="store_true")
-    parser.add_argument("--no_hands", action="store_true")
-    parser.add_argument("--cleanup", action="store_true")
-    parser.add_argument("--final_incam", action="store_true")
-    return parser.parse_args()
+REPO_DIR = Path(__file__).resolve().parents[1]
+SCRIPT_DIR = REPO_DIR / "scripts"
 
 
-def main() -> None:
-    args = parse_args()
+def _int_range(lo: int, hi: int | None = None):
+    def parse(v: str) -> int:
+        n = int(v)
+        if n < lo or (hi is not None and n > hi):
+            raise argparse.ArgumentTypeError(f"must be {'between %d and %d' % (lo, hi) if hi else '>= %d' % lo}, got {n}")
+        return n
+    return parse
 
+
+DEPRECATED = {  # old process_video.sh flags -> what happens now
+    "--production": "is the default (no renders)",
+    "--skip_render": "is the default (no renders)",
+    "--use_gvhmr_focal": "is always on",
+    "--hand_detector": "is ignored (HaMeR uses its own detector)",
+    "--hand-detector": "is ignored (HaMeR uses its own detector)",
+}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="vid2smplx", description="Video -> SMPL-X parameters (body, hands, face, gaze, blink)")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    r = sub.add_parser("run", help="process a video end-to-end")
+    r.add_argument("video", help="input video (mp4)")
+    r.add_argument("--output-dir", "--output_dir", default="", help="output root (default: <repo>/output)")
+    r.add_argument("--final-incam", "--final_incam", action="store_true", help="render final mesh overlaid on video")
+    r.add_argument("--full-debug", "--full_debug", action="store_true", help="render every debug video (body, hands, face, global)")
+    r.add_argument("--no-hands", "--no_hands", action="store_true", help="skip HaMeR")
+    r.add_argument("--no-face", "--no_face", action="store_true", help="skip EMICA, gaze and blink")
+    r.add_argument("--percent", type=_int_range(1, 100), default=100, help="process only the first N%% of the video (testing)")
+    r.add_argument("--downsample", type=_int_range(1), default=1, help="run hands on every Nth frame")
+    r.add_argument("--batch-size", "--batch_size", type=_int_range(1), default=48, help="HaMeR batch size")
+    r.add_argument("--dynamic-cam", "--dynamic_cam", action="store_true", help="moving camera: run visual odometry (default: static)")
+    r.add_argument("--hand-detector", "--hand_detector", default="mediapipe", help=argparse.SUPPRESS)  # legacy no-op
+    for flag in ("--production", "--skip_render", "--use_gvhmr_focal"):
+        r.add_argument(flag, action="store_true", help=argparse.SUPPRESS)  # legacy no-ops, warned in validate_run_args
+    r.add_argument("--seed", type=int, default=None, help="fix RNG seeds in face/gaze/merge/IK steps (GVHMR and HaMeR are deterministic in eval); used by the functional tests")
+    r.add_argument("--cleanup", action="store_true", help="delete intermediates, keep smplx_params.npz + gaze_blink/")
+    r.add_argument("--face-method", "--face_method", default="emica", choices=["emica"], help=argparse.SUPPRESS)
+    r.add_argument("--skip-doctor", action="store_true", help=argparse.SUPPRESS)
+
+    d = sub.add_parser("render", help="re-render layers of an existing output dir")
+    d.add_argument("clip_dir")
+    d.add_argument("--layers", default="final", help="comma list: final,global,hands,face,gvhmr")
+    d.add_argument("--video", default="", help="source video if gvhmr/ was cleaned up")
+
+    sub.add_parser("doctor", help="check environment, weights and symlinks")
+    sub.add_parser("download", help="download weights and create submodule symlinks")
+    return p
+
+
+def cmd_render(args) -> None:
+    cmd = ["python", str(SCRIPT_DIR / "render.py"), "--clip_dir", args.clip_dir,
+           "--layers", args.layers, "--smplx_dir", str(REPO_DIR / "models" / "smplx")]
+    if args.video:
+        cmd += ["--video", args.video]
+    conda_run(cmd)
+
+
+def cmd_download() -> None:
+    from .checks import make_links
+    run(["bash", str(SCRIPT_DIR / "download_models.sh")])
+    for link in make_links():
+        print(f"  [link] {link}")
+
+
+def validate_run_args(args, argv: list[str], error) -> None:
+    """Reject impossible inputs, warn on deprecated / redundant flags, normalise combinations."""
+    if not Path(args.video).is_file():
+        error(f"video not found: {args.video}")
+    for flag, note in DEPRECATED.items():
+        if flag in argv:
+            print(f"  [DEPRECATED] {flag} {note}; remove it from your command.")
+    if args.full_debug and args.final_incam:
+        print("  [NOTE] --full-debug already includes the final incam render; ignoring --final-incam.")
+        args.final_incam = False
+    if args.no_hands and args.downsample != 1:
+        print("  [NOTE] --downsample has no effect with --no-hands.")
     if args.no_face:
         args.face_method = ""
+
+
+def main(argv: list[str] | None = None) -> None:
+    argv = sys.argv[1:] if argv is None else argv
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.cmd == "doctor":
+        from .checks import doctor
+        sys.exit(0 if doctor() else 1)
+    if args.cmd == "download":
+        cmd_download()
+        return
+    if args.cmd == "render":
+        cmd_render(args)
+        return
+    validate_run_args(args, argv, parser.error)
+    if not args.skip_doctor:
+        from .checks import doctor
+        skip = set()
+        if args.no_face:
+            skip |= {"EMICA", "Gaze"}
+        if args.no_hands:
+            skip |= {"HaMeR", "Hands", "MANO"}
+        if not doctor(check_env=False, skip=skip):
+            sys.exit(1)
+    cmd_run(args)
+
+
+def cmd_run(args) -> None:
+
     production = not args.full_debug
 
+    if args.seed is not None:
+        os.environ["VID2SMPLX_SEED"] = str(args.seed)
+        os.environ["PYTHONHASHSEED"] = str(args.seed)
+        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     os.environ.setdefault("RENDERER", "nvdr")
     os.environ["PYTHONWARNINGS"] = "ignore::DeprecationWarning,ignore::FutureWarning"
 
-    script_dir = Path(__file__).resolve().parent
-    repo_dir = script_dir.parent
+    script_dir, repo_dir = SCRIPT_DIR, REPO_DIR
 
     video = Path(args.video).resolve()
     video_name = video.stem
@@ -403,8 +538,11 @@ def main() -> None:
 
     # Step 4.5: IK hands
     if hamer_params_pt.exists() or dir_has_files(hamer_params_legacy):
-        import numpy as np
-        ik_already = smplx_out.exists() and "ik_wrist_loss" in np.load(str(smplx_out), allow_pickle=True)
+        try:
+            import numpy as np
+            ik_already = smplx_out.exists() and "ik_wrist_loss" in np.load(str(smplx_out), allow_pickle=True)
+        except ImportError:   # orchestrator outside the env: rerunning IK is safe (idempotent optimization)
+            ik_already = False
 
         if ik_already:
             print("==== Step 4.5: IK hands (SKIPPED — already applied) ====")
@@ -461,10 +599,10 @@ def main() -> None:
     # Cleanup
     if args.cleanup:
         print("  [Cleanup] Removing intermediates...")
-        for d in [gvhmr_out, hamer_out, output_dir / "emica", render_out]:
+        for d in [gvhmr_out, hamer_out, output_dir / "emica"]:
             if d.exists():
                 shutil.rmtree(d, ignore_errors=True)
-        print("  [Cleanup] Done - kept smplx_params.npz + gaze_blink/")
+        print("  [Cleanup] Done - kept smplx_params.npz, gaze_blink/" + (", render/" if render_out.is_dir() else ""))
 
     # Summary
     print()
@@ -474,7 +612,7 @@ def main() -> None:
     print(f"  SMPL-X params: {smplx_out}")
     if gaze_blink_result and gaze_blink_result.exists():
         print(f"  Gaze+Blink:   {gaze_blink_result}")
-    if not args.cleanup and render_out.is_dir():
+    if render_out.is_dir():
         print(f"  Renders:      {render_out}/")
     print()
     print("=" * 44)

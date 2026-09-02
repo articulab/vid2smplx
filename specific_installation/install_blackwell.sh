@@ -210,6 +210,9 @@ conda run -n "$ENV_NAME" --no-capture-output pip install -e "$REPO_DIR/hamer/thi
 echo "  Installing Inferno..."
 conda run -n "$ENV_NAME" --no-capture-output pip install --no-deps --no-build-isolation -e "$REPO_DIR/inferno"
 
+echo "  Installing vid2smplx CLI..."
+conda run -n "$ENV_NAME" --no-capture-output pip install --no-deps -e "$REPO_DIR"
+
 echo "  [OK] Editable installs complete"
 echo ""
 
@@ -290,5 +293,6 @@ echo ""
 echo "  Activate with: conda activate $ENV_NAME"
 echo ""
 echo "  Quick test:"
-echo "    bash scripts/process_video.sh /path/to/video.mp4 --percent 5"
+echo "    CONDA_ENV=$ENV_NAME vid2smplx doctor"
+echo "    CONDA_ENV=$ENV_NAME vid2smplx run examples/clip_talking.mp4 --percent 10 --final-incam"
 echo ""

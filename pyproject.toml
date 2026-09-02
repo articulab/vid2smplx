@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vid2smplx"
+version = "0.1.0"
+description = "Full-body SMPL-X parameters (body, hands, face, gaze, blink) from monocular video"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+
+[project.optional-dependencies]
+test = ["pytest", "matplotlib"]
+
+[project.scripts]
+vid2smplx = "vid2smplx.cli:main"
+
+[tool.setuptools]
+packages = ["vid2smplx"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["functional: runs the real models on a GPU (slow, needs weights)"]
+addopts = "-m 'not functional'"

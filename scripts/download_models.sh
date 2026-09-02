@@ -3,8 +3,8 @@
 # download_models.sh - Download all model weights for vid2smplx
 #
 # Usage:
-#   bash scripts/download_models.sh          # download all auto-downloadable weights
-#   bash scripts/download_models.sh --all    # also attempt SMPL-X/MANO/FLAME (needs manual setup)
+#   vid2smplx download   (or: bash scripts/download_models.sh)
+#   vid2smplx download   (or: bash scripts/download_models.sh)
 # ============================================================================
 
 set -e
@@ -13,6 +13,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 GVHMR_DIR="$REPO_DIR/GVHMR"
 HAMER_DIR="$REPO_DIR/hamer"
+# Staging dir for archives: NOT /tmp — that is often a small tmpfs and the archives are multi-GB
+TMP="$REPO_DIR/models/.downloads"
+mkdir -p "$TMP"
 
 DOWNLOAD_ALL=0
 [ "$1" = "--all" ] && DOWNLOAD_ALL=1
@@ -69,11 +72,10 @@ if [ -f "$HAMER_DATA/hamer_ckpts/checkpoints/hamer.ckpt" ]; then
     echo "  [SKIP] Already exists: hamer.ckpt"
 else
     echo "  [Download] HaMeR demo data..."
-    mkdir -p "$HAMER_DATA"
-    wget -q --show-progress -O "/tmp/hamer_demo_data.tar.gz" \
+    wget -q --show-progress -O "$TMP/hamer_demo_data.tar.gz" \
         "https://www.cs.utexas.edu/~pavlakos/hamer/data/hamer_demo_data.tar.gz"
-    tar -xzf "/tmp/hamer_demo_data.tar.gz" -C "$HAMER_DATA"
-    rm -f "/tmp/hamer_demo_data.tar.gz"
+    tar -xzf "$TMP/hamer_demo_data.tar.gz" -C "$HAMER_DIR"   # archive already contains the _DATA/ top level
+    rm -f "$TMP/hamer_demo_data.tar.gz"
 fi
 echo ""
 
@@ -87,34 +89,45 @@ if [ -d "$INFERNO_ASSETS/FaceReconstruction" ]; then
 else
     echo "  [Download] FaceReconstruction models..."
     mkdir -p "$INFERNO_ASSETS"
-    wget -q --show-progress -O "/tmp/FaceReconstruction.zip" \
+    wget -q --show-progress -O "$TMP/FaceReconstruction.zip" \
         "https://download.is.tue.mpg.de/emote/FaceReconstruction.zip"
-    unzip -q "/tmp/FaceReconstruction.zip" -d "$INFERNO_ASSETS/"
-    rm -f "/tmp/FaceReconstruction.zip"
+    unzip -q "$TMP/FaceReconstruction.zip" -d "$INFERNO_ASSETS/"
+    rm -f "$TMP/FaceReconstruction.zip"
 fi
 
-# MICA model
-if [ -f "$INFERNO_ASSETS/mica/mica.tar" ] || [ -d "$INFERNO_ASSETS/mica" ]; then
+# MICA model (a PyTorch checkpoint; despite the .tar name it is not an archive)
+MICA_CKPT="$INFERNO_ASSETS/mica/model/mica.tar"
+if [ -f "$MICA_CKPT" ]; then
     echo "  [SKIP] MICA model already exists"
 else
     echo "  [Download] MICA model..."
-    mkdir -p "$INFERNO_ASSETS/mica"
-    wget -q --show-progress -O "$INFERNO_ASSETS/mica/mica.tar" \
+    mkdir -p "$(dirname "$MICA_CKPT")"
+    wget -q --show-progress -O "$MICA_CKPT" \
         "https://keeper.mpdl.mpg.de/f/db172dc4bd4f4c0f96de/?dl=1"
-    tar -xf "$INFERNO_ASSETS/mica/mica.tar" -C "$INFERNO_ASSETS/mica/"
 fi
 
-# InsightFace models
-INSIGHTFACE_DIR="$REPO_DIR/models/insightface"
-if [ -d "$INSIGHTFACE_DIR/antelopev2" ]; then
+# FLAME assets for EMICA (EMOCA release: head template, masks, generic_model.pkl) -> inferno/assets/FLAME
+if [ -f "$REPO_DIR/inferno/assets/FLAME/geometry/generic_model.pkl" ]; then
+    echo "  [SKIP] inferno/assets/FLAME already exists"
+else
+    echo "  [Download] FLAME assets (EMOCA)..."
+    mkdir -p "$REPO_DIR/inferno/assets"
+    wget -q --show-progress -O "$TMP/FLAME.zip" "https://download.is.tue.mpg.de/emoca/assets/FLAME.zip"
+    unzip -q -o "$TMP/FLAME.zip" -d "$REPO_DIR/inferno/assets/"
+    rm -f "$TMP/FLAME.zip"
+fi
+
+# InsightFace antelopev2 — inferno loads it from ~/.insightface (hard-coded), so put it there
+INSIGHTFACE_DIR="$HOME/.insightface/models/antelopev2"
+if [ -f "$INSIGHTFACE_DIR/scrfd_10g_bnkps.onnx" ]; then
     echo "  [SKIP] InsightFace antelopev2 already exists"
 else
-    echo "  [Download] InsightFace antelopev2..."
+    echo "  [Download] InsightFace antelopev2 -> $INSIGHTFACE_DIR"
     mkdir -p "$INSIGHTFACE_DIR"
-    wget -q --show-progress -O "/tmp/antelopev2.zip" \
+    wget -q --show-progress -O "$TMP/antelopev2.zip" \
         "https://keeper.mpdl.mpg.de/f/2d58b7fed5a74cb5be83/?dl=1"
-    unzip -q "/tmp/antelopev2.zip" -d "$INSIGHTFACE_DIR/"
-    rm -f "/tmp/antelopev2.zip"
+    unzip -q -o -j "$TMP/antelopev2.zip" -d "$INSIGHTFACE_DIR/"
+    rm -f "$TMP/antelopev2.zip"
 fi
 echo ""
 
@@ -139,8 +152,8 @@ else
     echo ""
     echo "  Attempting download with gdown..."
     if command -v gdown &>/dev/null; then
-        gdown --folder "https://drive.google.com/drive/folders/17p6ORr-JQJcw-eYtG2WGNiuS_qVKwdWd" -O "$REPO_DIR/models/" 2>/dev/null || \
-            echo "  [WARN] gdown failed - please download manually"
+        gdown --folder "17p6ORr-JQJcw-eYtG2WGNiuS_qVKwdWd" -O "$REPO_DIR/models/" 2>/dev/null || true
+        [ -f "$L2CS_WEIGHTS" ] || echo "  [WARN] gdown could not fetch it (Google Drive rate-limits folder listings) - download manually, see above"
     else
         echo "  [WARN] gdown not installed - please download manually"
     fi
@@ -169,19 +182,11 @@ else
     echo "               Download MANO v1.2 -> extract to models/mano/"
 fi
 
-FLAME_MODEL="$REPO_DIR/models/flame/generic_model.pkl"
-if [ -f "$FLAME_MODEL" ] || [ -d "$REPO_DIR/models/flame" ]; then
-    echo "  [OK] FLAME:   $REPO_DIR/models/flame/"
-else
-    echo "  [ ] FLAME:   Register at https://flame.is.tue.mpg.de/"
-    echo "               Download FLAME 2020 -> extract to models/flame/"
-    echo "               OR: wget https://download.is.tue.mpg.de/emoca/assets/FLAME.zip"
-fi
-
 echo ""
 echo "============================================"
 echo "  Model download complete!"
 echo "============================================"
 echo ""
+rmdir "$TMP" 2>/dev/null || true
 echo "  Check above for any [WARN] or [ ] items that need manual action."
 echo ""
