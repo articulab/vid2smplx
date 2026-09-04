@@ -198,7 +198,8 @@ def _load_hamer_params_npz(params_dir):
 # ---------------------------------------------------------------------------
 
 def merge(gvhmr_path: Path | str, hamer_params_dir: Path | str | None, output_path: Path | str, coord_system: str = "global",
-          flame_result: Path | str | None = None, gaze_blink_result: Path | str | None = None) -> dict[str, np.ndarray]:
+          flame_result: Path | str | None = None, gaze_blink_result: Path | str | None = None,
+          fps: float = 0.0) -> dict[str, np.ndarray]:
     """Merge GVHMR body + HaMeR hands + FLAME face + gaze/blink into smplx_params.npz.
 
     Writes a compressed .npz to output_path. See README.md for full key listing.
@@ -306,6 +307,7 @@ def merge(gvhmr_path: Path | str, hamer_params_dir: Path | str | None, output_pa
         "blink_right": np.zeros(num_frames, dtype=np.float32),
         "num_frames": num_frames,
         "coord_system": coord_system,
+        "fps": np.float32(fps),
     }
 
     # Save the other coord system's orient+transl for rendering
@@ -415,6 +417,10 @@ def main() -> None:
     parser.add_argument("--output", type=str, required=True)
     parser.add_argument("--coord", type=str, default="global", choices=["global", "incam"])
     parser.add_argument("--gaze_blink_result", type=str, default=None)
+    parser.add_argument("--fps", type=float, default=0.0,
+                        help="Source video frame rate, stored in the npz. Without it a "
+                             "consumer cannot convert frame index to time, and datasets "
+                             "that mix rates (e.g. 25 and 29.97) silently disagree.")
     args = parser.parse_args()
 
     print(f"=== Merging Body + Hands + Face -> SMPL-X ===")
@@ -428,7 +434,7 @@ def main() -> None:
 
     merge(args.gvhmr_result, args.hamer_result, args.output, args.coord,
           flame_result=args.flame_result,
-          gaze_blink_result=args.gaze_blink_result)
+          gaze_blink_result=args.gaze_blink_result, fps=args.fps)
 
 
 if __name__ == "__main__":

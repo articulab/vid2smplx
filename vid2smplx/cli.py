@@ -613,6 +613,14 @@ def cmd_run(args) -> None:
             "--gvhmr_result", str(gvhmr_result),
             "--output", str(smplx_out), "--coord", "global",
         ]
+        # Frame index is only a time base if fps travels with the params: this
+        # dataset mixes 25 and 29.97, so a consumer cannot assume one rate.
+        _fps = ffprobe_field(str(video), "r_frame_rate")
+        try:
+            _num, _den = _fps.split("/")
+            merge_cmd.extend(["--fps", str(float(_num) / float(_den))])
+        except (ValueError, ZeroDivisionError):
+            print(f"  [WARN] could not read fps from {video} (got {_fps!r}); npz will store 0")
         if hamer_params_pt.exists() or dir_has_files(hamer_params_legacy):
             merge_cmd.extend(["--hamer_result", str(hamer_params)])
         if flame_result and Path(flame_result).exists():
