@@ -33,7 +33,8 @@ for f in files:
     name = os.path.basename(f)[:-4]
     L = int(z["num_frames"])
     exc = os.path.exists(f"{os.path.dirname(f)}/{name}_excerpt.mp4")
-    rec = dict(name=name, sess=sess, cond=cond, frames=L,
+    fps = float(z["fps"]) if "fps" in z and float(z["fps"]) > 0 else args.fps
+    rec = dict(name=name, sess=sess, cond=cond, frames=L, fps=fps,
                mb=os.path.getsize(f) / 1e6, excerpt=exc,
                hl=float(z["left_hand_valid"].mean()) if "left_hand_valid" in z else 0.0,
                hr=float(z["right_hand_valid"].mean()) if "right_hand_valid" in z else 0.0,
@@ -58,8 +59,9 @@ w("")
 w(f"_Generated {datetime.date.today().isoformat()} by "
   "`vid2smplx/scripts/make_corpus_readme.py` — re-run to refresh._")
 w("")
+tot_hours = sum(c["frames"] / c["fps"] for c in clips) / 3600
 w(f"**{len(clips)} clips**, {tot_frames:,} frames "
-  f"({tot_frames / args.fps / 3600:.1f} h of video at {args.fps} fps), {tot_mb / 1000:.1f} GB. "
+  f"({tot_hours:.1f} h of video), {tot_mb / 1000:.1f} GB. "
   f"{n_exc}/{len(clips)} have a preview excerpt.")
 w("")
 w("Each clip is one participant's camera. Participants in the same session and")
@@ -92,7 +94,10 @@ w("")
 
 w("## Clip lengths")
 w("")
-w("Frame counts are **not uniform** — they vary by condition and session:")
+rates = sorted({round(c["fps"], 2) for c in clips})
+w(f"Frame counts are **not uniform**, and the corpus mixes frame rates ({rates}). "
+  "Each clip stores its own `fps`; **do not assume a single rate** — frame index is "
+  "only a time base per clip.")
 w("")
 w("| condition | clips | frames (min–max) | duration | npz size |")
 w("|---|---:|---|---|---|")
@@ -101,7 +106,7 @@ for cond in sorted(by_cond):
     fs = [r["frames"] for r in rs]
     rng = f"{min(fs):,}" if min(fs) == max(fs) else f"{min(fs):,} – {max(fs):,}"
     w(f"| {cond} | {len(rs)} | {rng} | "
-      f"{sum(fs) / len(fs) / args.fps / 60:.1f} min avg | {sum(r['mb'] for r in rs) / len(rs):.1f} MB |")
+      f"{sum(r['frames'] / r['fps'] for r in rs) / len(rs) / 60:.1f} min avg | {sum(r['mb'] for r in rs) / len(rs):.1f} MB |")
 w("")
 w("BP / CS / TP are the long (~20 min) conditions; FT1 / FT2 are short (~7 min).")
 w("")
