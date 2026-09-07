@@ -1,9 +1,9 @@
 [submodule "GVHMR"]
 	path = GVHMR
-	url = git@github.com:MachtaYassine/GVHMR.git
+	url = https://github.com/MachtaYassine/GVHMR.git
 [submodule "hamer"]
 	path = hamer
-	url = git@github.com:MachtaYassine/hamer.git
+	url = https://github.com/MachtaYassine/hamer.git
 [submodule "inferno"]
 	path = inferno
 	url = https://github.com/radekd91/inferno.git

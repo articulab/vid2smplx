@@ -85,6 +85,32 @@ def test_docs_list_every_model():
         assert p.name in docs or p.parent.name in docs, f"{rel} missing from docs/models.md"
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_submodules_are_cloneable_without_an_ssh_key():
+    """SSH URLs make `git submodule update` fail for anyone without a GitHub key."""
+    gm = (REPO_ROOT / ".gitmodules").read_text()
+    ssh = [l.strip() for l in gm.splitlines() if "git@" in l]
+    assert not ssh, f".gitmodules uses SSH URLs: {ssh}"
+
+
+def test_blackwell_pins_setuptools_before_installing_hamer():
+    """mmcv==1.3.9's setup.py imports pkg_resources, removed in setuptools 71."""
+    lines = (REPO_ROOT / "specific_installation" / "install_blackwell.sh").read_text().splitlines()
+    pin = next((i for i, l in enumerate(lines) if "setuptools<71" in l), None)
+    hamer = next((i for i, l in enumerate(lines) if "-e" in l and "$REPO_DIR/hamer\"" in l), None)
+    assert pin is not None and hamer is not None, "expected both lines to exist"
+    assert pin < hamer, f"setuptools pin (line {pin+1}) must precede hamer install (line {hamer+1})"
+
+
+def test_both_installers_create_submodule_symlinks():
+    """download_models.sh alone does not call make_links(); `vid2smplx download` does."""
+    for rel in ("install.sh", "specific_installation/install_blackwell.sh"):
+        s = (REPO_ROOT / rel).read_text()
+        assert "vid2smplx download" in s, f"{rel} must run `vid2smplx download` so make_links() runs"
+
+
 def test_blackwell_pins_match_frozen_requirements():
     """Script pins must match the frozen requirements; drift built a broken env."""
     root = Path(__file__).resolve().parents[1] / "specific_installation"

@@ -215,6 +215,9 @@ echo ""
 # ---- Phase 4: Editable installs ----
 echo "=== Phase 4/6: Editable Installs ==="
 
+# mmcv==1.3.9 (a hamer dep) has a setup.py that imports pkg_resources, gone in setuptools 71
+conda run -n "$ENV_NAME" --no-capture-output pip install "setuptools<71"
+
 echo "  Installing GVHMR..."
 conda run -n "$ENV_NAME" --no-capture-output pip install -e "$REPO_DIR/GVHMR"
 
@@ -244,7 +247,7 @@ elif [ "$SKIP_MODELS" -eq 1 ]; then
     echo "=== Phase 5/6: Model Downloads (SKIPPED - --skip-models) ==="
 else
     echo "=== Phase 5/6: Model Downloads ==="
-    bash "$REPO_DIR/scripts/download_models.sh"
+    conda run -n "$ENV_NAME" --no-capture-output vid2smplx download   # also creates the symlinks
 fi
 echo ""
 
