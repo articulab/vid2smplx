@@ -24,9 +24,10 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$SCRIPT_DIR"
+# Repo is the PARENT of this dir (script lives in specific_installation/)
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
-ENV_NAME="vid2smplx_bw"
+ENV_NAME="${CONDA_ENV:-vid2smplx_bw}"
 PYTHON_VERSION="3.10"
 SKIP_MODELS=0
 ENV_ONLY=0
@@ -89,26 +90,36 @@ conda run -n "$ENV_NAME" --no-capture-output pip install \
     torch==2.10.0+cu128 torchvision==0.25.0+cu128 \
     --extra-index-url https://download.pytorch.org/whl/cu128
 
-echo "  Building pytorch3d from source (this takes ~10-15 min)..."
+# Source builds need nvcc; without it they build CPU-only without failing
+echo "  Installing CUDA toolkit (nvcc) for the source builds..."
+conda install -n "$ENV_NAME" -y -c nvidia cuda-toolkit=12.8
+export CUDA_HOME="$(conda info --base)/envs/$ENV_NAME"
+export FORCE_CUDA=1
+"$CUDA_HOME/bin/nvcc" --version | tail -1
+
+# nvcc uses 2-3 GB per job; one-per-core OOM-kills a 30 GB laptop
+export MAX_JOBS="${MAX_JOBS:-4}"
+
+echo "  Building pytorch3d from source (this takes ~10-15 min, MAX_JOBS=$MAX_JOBS)..."
 conda run -n "$ENV_NAME" --no-capture-output pip install --no-build-isolation \
     "pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git@stable"
 
 echo "  Installing core dependencies..."
 conda run -n "$ENV_NAME" --no-capture-output pip install \
-    numpy==1.23.5 \
+    numpy==1.26.4 \
     opencv-python \
     smplx==0.1.28 \
     trimesh \
     einops \
-    timm==0.9.12 \
+    timm==1.0.25 \
     lightning==2.3.0 \
-    hydra-core==1.3 \
+    hydra-core==1.3.2 \
     hydra-zen \
     hydra_colorlog \
     rich \
     scikit-image \
-    imageio==2.34.1 \
-    av==13.0.0 \
+    imageio==2.37.3 \
+    av==17.0.0 \
     ffmpeg-python \
     tensorboardX \
     matplotlib \
@@ -142,21 +153,26 @@ conda run -n "$ENV_NAME" --no-capture-output pip install --no-build-isolation \
 
 echo "  Installing EMICA/Inferno dependencies..."
 conda run -n "$ENV_NAME" --no-capture-output pip install --no-deps --no-build-isolation \
-    insightface==0.6.2
+    insightface==0.7.3
 conda run -n "$ENV_NAME" --no-capture-output pip install \
-    onnx onnxruntime-gpu prettytable scikit-learn easydict
+    "onnx==1.20.1" onnxruntime-gpu prettytable scikit-learn easydict
 
 conda run -n "$ENV_NAME" --no-capture-output pip install --no-deps \
-    face-alignment==1.3.5 \
-    facenet-pytorch==2.5.2 \
+    face-alignment==1.4.1 \
+    facenet-pytorch==2.6.0 \
     kornia==0.6.5 \
-    albumentations==1.0.3 \
-    mediapipe \
+    albumentations==2.0.8 \
+    mediapipe==0.10.21 \
     munch \
     compress-pickle \
     hickle \
     decord
 conda run -n "$ENV_NAME" --no-capture-output pip install numba
+
+# inferno imports these at module level
+conda run -n "$ENV_NAME" --no-capture-output pip install \
+    imgaug shapely sk-video "wandb==0.25.1" soundfile librosa loguru h5py onnx2torch \
+    "albucore==0.0.24"   # albumentations 2.x split its core out; we install it --no-deps
 
 conda run -n "$ENV_NAME" --no-capture-output pip install \
     "transformers<5" \
@@ -186,8 +202,9 @@ import torch
 _original_torch_load = torch.load
 
 def _patched_torch_load(*args, **kwargs):
-    if 'weights_only' not in kwargs:
-        kwargs['weights_only'] = False
+    # unconditional: lightning passes weights_only=True explicitly, so a
+    # "only if absent" patch never fires and EMICA fails loading its checkpoint
+    kwargs['weights_only'] = False
     return _original_torch_load(*args, **kwargs)
 
 torch.load = _patched_torch_load
@@ -213,6 +230,10 @@ conda run -n "$ENV_NAME" --no-capture-output pip install --no-deps --no-build-is
 echo "  Installing vid2smplx CLI..."
 conda run -n "$ENV_NAME" --no-capture-output pip install --no-deps -e "$REPO_DIR"
 
+# Must stay LAST: the editable installs above re-resolve deps and undo these pins
+conda run -n "$ENV_NAME" --no-capture-output pip install \
+    "numpy==1.26.4" "protobuf==4.25.8" "setuptools<71"
+
 echo "  [OK] Editable installs complete"
 echo ""
 
@@ -235,7 +256,7 @@ import sys
 
 modules = {
     'torch':        'import torch',
-    'pytorch3d':    'import pytorch3d',
+    'pytorch3d':    'import pytorch3d; from pytorch3d import _C; _C.gather_scatter',   # attr only exists in a CUDA build
     'smplx':        'import smplx',
     'hmr4d (GVHMR)':'import hmr4d',
     'hamer':        'import hamer',
@@ -284,6 +305,8 @@ if failed:
 else:
     print('  All packages verified successfully!')
 " 2>&1 | grep -v -E "pkg_resources is deprecated|DeprecationWarning|FutureWarning"
+# set -e reads the last command of a pipeline (grep), not the verifier's exit code
+[ "${PIPESTATUS[0]}" -eq 0 ] || { echo "  Install incomplete — see the [FAIL] lines above."; exit 1; }
 
 echo ""
 echo "============================================"
