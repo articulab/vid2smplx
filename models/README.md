@@ -12,10 +12,15 @@
 | EMICA | `inferno/assets/FLAME/geometry/generic_model.pkl` | auto (`FLAME.zip` from EMOCA, unzipped into `inferno/assets/`) |
 | Hands | `models/mediapipe/hand_landmarker.task` | auto |
 | Gaze | `models/L2CSNet_gaze360.pkl` | `gdown` tries; else download manually from [Google Drive](https://drive.google.com/drive/folders/17p6ORr-JQJcw-eYtG2WGNiuS_qVKwdWd) into `models/` |
-| SMPL-X | `models/smplx/SMPLX_NEUTRAL.npz` | **manual** — register at https://smpl-x.is.tue.mpg.de/, download *SMPL-X v1.1 (NPZ)*, unzip into `models/smplx/` |
+| SMPL-X | `models/smplx/SMPLX_NEUTRAL.npz`, `models/smplx/MANO_SMPLX_vertex_ids.pkl` | **manual** — register at https://smpl-x.is.tue.mpg.de/, download *SMPL-X v1.1 (NPZ)*. Both files are in the archive; the IK stage fails without the vertex ids |
 | MANO | `models/mano/MANO_RIGHT.pkl` (+ `MANO_LEFT.pkl`) | **manual** — register at https://mano.is.tue.mpg.de/, download *MANO v1.2*, unzip into `models/mano/` |
 
 Registration is free for research use. ~15 GB total.
+
+`models/` starts empty (git ignores its subdirectories), so create the folders first:
+`mkdir -p models/smplx models/mano`. The SMPL-X archive expands to a nested
+`models/smplx/` of its own — copy the files in, don't unzip the archive on top, or you
+end up with `models/smplx/models/smplx/` and `doctor` still reports `[MISS]`.
 
 ## Symlinks
 

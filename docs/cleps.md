@@ -16,8 +16,13 @@ sbatch --partition=gpu --gres=gpu:1 --cpus-per-task=8 --mem=64G --time=06:00:00 
        --wrap 'source ~/miniconda3/etc/profile.d/conda.sh && bash install.sh'
 ```
 
-Then put the two registration-gated files in place (see [models.md](models.md)) and run
-`vid2smplx doctor` — also on a compute node.
+Then put the registration-gated files in place (see [models.md](models.md)) and run
+`vid2smplx doctor` — also on a compute node, and inside the env:
+
+```bash
+conda activate vid2smplx     # the CLI is installed into the env, not on PATH
+vid2smplx doctor
+```
 
 ## Why install has to be a batch job
 

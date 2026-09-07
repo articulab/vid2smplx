@@ -62,6 +62,13 @@ def test_empty_placeholder_dir_is_replaced_by_link(tmp_path, capsys):
     assert doctor(repo=tmp_path, check_env=False, home=tmp_path / "home") is False
     assert "[MISS] link" in capsys.readouterr().out
 
+    # a dangling symlink must be repairable, not a permanent MISS
+    (tmp_path / link).rmdir()
+    (tmp_path / link).symlink_to(tmp_path / "nowhere")
+    assert doctor(repo=tmp_path, check_env=False, home=tmp_path / "home") is False
+    assert link in make_links(tmp_path)
+    assert doctor(repo=tmp_path, check_env=False, home=tmp_path / "home") is True
+
 
 def test_doctor_skip_groups(tmp_path):
     _touch_all(tmp_path, skip=("EMICA", "Gaze"))

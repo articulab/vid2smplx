@@ -31,6 +31,9 @@ MODELS = [
      "gdown or manual: https://drive.google.com/drive/folders/17p6ORr-JQJcw-eYtG2WGNiuS_qVKwdWd -> models/"),
     ("SMPL-X", "models/smplx/SMPLX_NEUTRAL.npz",
      "register at https://smpl-x.is.tue.mpg.de/ (SMPL-X v1.1 NPZ) -> unzip to models/smplx/"),
+    # ik_hands.py raises FileNotFoundError without this; ships in the same SMPL-X archive
+    ("SMPL-X", "models/smplx/MANO_SMPLX_vertex_ids.pkl",
+     "same SMPL-X v1.1 download (models_smplx_v1_1/models/smplx/) -> models/smplx/"),
     ("MANO", "models/mano/MANO_RIGHT.pkl",
      "register at https://mano.is.tue.mpg.de/ (MANO v1.2) -> unzip to models/mano/"),
 ]
@@ -60,10 +63,14 @@ def make_links(repo: Path = REPO) -> list[str]:
     made = []
     for link, target in LINKS:
         link_p, target_p = repo / link, repo / target
-        if link_p.is_symlink() or (link_p.exists() and any(link_p.iterdir())):
-            continue
-        # hamer_demo_data.tar.gz ships an EMPTY _DATA/data/mano/ — a placeholder, not a target
-        if link_p.exists():
+        if link_p.is_dir() and any(link_p.iterdir()):
+            continue          # already usable, whether real dir or good symlink
+        # Replace whatever is in the way: an empty placeholder dir (hamer_demo_data.tar.gz
+        # ships one at _DATA/data/mano/) or a symlink that resolves to nothing. Skipping
+        # those left doctor reporting MISS with no way to repair it.
+        if link_p.is_symlink():
+            link_p.unlink()
+        elif link_p.exists():
             link_p.rmdir()
         link_p.parent.mkdir(parents=True, exist_ok=True)
         link_p.symlink_to(target_p)

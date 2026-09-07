@@ -50,7 +50,7 @@ All outputs are at 30 FPS.
 ## Quickstart
 
 ```bash
-git clone --recursive https://github.com/articulab/vid2smplx.git && cd vid2smplx
+git clone https://github.com/articulab/vid2smplx.git && cd vid2smplx   # not --recursive: see docs/install.md
 bash install.sh                 # conda env + deps + ~12 GB of weights, ends with `vid2smplx doctor`  (or: --uv)
 # doctor will ask for SMPL-X and MANO (free registration) -> see docs/models.md
 conda activate vid2smplx

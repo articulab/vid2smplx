@@ -4,7 +4,7 @@
 
 - Linux (tested on Ubuntu 20.04 / 22.04)
 - NVIDIA GPU, 8 GB+ VRAM (5.1 GB peak measured; tested on RTX PRO 1000 8 GB, RTX 8000, A100, H100)
-- Conda, git, ffmpeg
+- Conda, git, ffmpeg, plus `wget`, `unzip` and `tar` (used by the weight downloader)
 - ~15 GB disk for weights
 
 ## Steps
@@ -28,7 +28,8 @@ Afterwards `conda activate vid2smplx` or `source .venv/bin/activate` — the `vi
 detects that it is inside the env and runs steps directly (outside any env it falls back to `conda run -n $CONDA_ENV`).
 
 `install.sh` ends by running `vid2smplx doctor`. It will report `[MISS]` for the two files that need
-a (free) registration: **SMPL-X** and **MANO**. Follow the links it prints — details in [models.md](models.md) — then:
+a (free) registration (**SMPL-X**, incl. `MANO_SMPLX_vertex_ids.pkl`, and **MANO**), and often for
+**L2CSNet_gaze360.pkl**, which gdown rate-limits. Follow the links it prints — details in [models.md](models.md) — then:
 
 ```bash
 conda activate vid2smplx
@@ -55,7 +56,7 @@ are usually absent. See [cleps.md](cleps.md).
 
 ## Blackwell GPUs (RTX 50xx, RTX PRO, sm_120)
 
-Stable PyTorch 2.3 has no sm_120 kernels. Use the separate env (PyTorch 2.10 + CUDA 12.8, pytorch3d and nvdiffrast built from source, ~15 min):
+Stable PyTorch 2.3 has no sm_120 kernels. Use the separate env (PyTorch 2.10 + CUDA 12.8; pytorch3d and detectron2 are built from source, ~30 min):
 
 ```bash
 bash specific_installation/install_blackwell.sh
@@ -64,7 +65,11 @@ CONDA_ENV=vid2smplx_bw vid2smplx doctor
 ```
 
 If dependency resolution fails, `pip install -r specific_installation/requirements_blackwell.txt` gives the frozen set.
-Differences vs the main env: `TORCH_CUDA_ARCH_LIST="12.0"`, `setuptools<71` (mmcv needs `pkg_resources`), and HaMeR loads models lazily so 8 GB VRAM works.
+Differences vs the main env: torch 2.10+cu128, numpy 1.26.4 and the newer insightface/albumentations
+that requires, `setuptools<71` (mmcv needs `pkg_resources`), a conda `cuda-toolkit` for the source
+builds, and HaMeR loads models lazily so 8 GB VRAM works. `MAX_JOBS` caps build parallelism
+(default 4) — nvcc uses 2-3 GB per job. It renders with pytorch3d, not nvdiffrast.
+Flags: `--skip-models`, `--env-only`, `--force`, and `CONDA_ENV=name` to build into another env.
 
 ## Troubleshooting
 
@@ -90,8 +95,11 @@ and checks every stage: GVHMR shapes, HaMeR detections, EMICA/FLAME, gaze+blink,
 IK coverage and wrist error, renders. It writes `tests/functional/out/contact_sheet.png`, `curves.png`
 and the debug MP4s for eyeballing.
 
-Reproducibility: the seed fixes every CPU/torch RNG, but CUDA kernels are not bit-exact across runs or GPUs,
-so `test_golden` compares against `tests/functional/golden/smplx_params.npz` with tolerances (2 cm / 0.02 rad).
+Reproducibility: on one GPU the pipeline is bit-exact — two consecutive runs gave 76/76 detections
+identical. Across GPU architectures it is not (different cuDNN kernels, different reduction orders),
+so `test_golden` compares against `tests/functional/golden/smplx_params_torch<major.minor>.npz`
+with tolerances (2 cm / 0.02 rad) on the 99th percentile. Results differ per torch stack, so there is
+one golden each; a stack with no golden skips rather than fails.
 The first run skips that test; once the visuals look right, accept the output as the reference:
 
 ```bash
