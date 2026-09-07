@@ -10,12 +10,18 @@
 ## Steps
 
 ```bash
-git clone --recursive https://github.com/articulab/vid2smplx.git
+git clone https://github.com/articulab/vid2smplx.git
 cd vid2smplx
 bash install.sh            # conda env `vid2smplx`, all deps, auto-downloadable weights
 # or, without conda:
 bash install.sh --uv       # uv-managed .venv in the repo (needs ffmpeg + uv on PATH)
 ```
+
+Clone **without** `--recursive`: `inferno` declares nested submodules on a private GitLab
+(`rdanecek/infernal_sandbox`, `rdanecek/infernal_apps`) that no one outside the author can read, so
+`--recursive` aborts the whole clone with `Host key verification failed`. `install.sh` Phase 1 does
+the submodule init properly — full recursion for GVHMR and HaMeR, and only the six `external/*`
+submodules inferno actually needs.
 
 Both paths install the same pinned packages; the only difference is who owns the interpreter.
 Afterwards `conda activate vid2smplx` or `source .venv/bin/activate` — the `vid2smplx` command
@@ -41,6 +47,11 @@ Output lands in `output/clip_talking_10pct/` with `smplx_params.npz` and `render
 | `--skip-models` | don't download weights (run `vid2smplx download` later) |
 | `--env-only` | create env + packages only |
 | `--force` | delete and recreate the conda env |
+
+## SLURM clusters
+
+On a shared cluster the install has to run as a batch job on a GPU node, and ffmpeg/uv
+are usually absent. See [cleps.md](cleps.md).
 
 ## Blackwell GPUs (RTX 50xx, RTX PRO, sm_120)
 
