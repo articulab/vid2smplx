@@ -1,5 +1,6 @@
 """Smoke tests that need no GPU, no conda env, no weights.  Run: python -m pytest tests/  (or python tests/test_cli.py)"""
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -46,6 +47,22 @@ def test_doctor_passes_when_everything_exists(tmp_path, capsys):
     assert "[MISS]" not in capsys.readouterr().out
 
 
+def test_empty_placeholder_dir_is_replaced_by_link(tmp_path, capsys):
+    """hamer_demo_data.tar.gz ships an empty _DATA/data/mano/; it must not shadow the link."""
+    _touch_all(tmp_path)
+    link, target = LINKS[1]                      # hamer/_DATA/data/mano
+    (tmp_path / link).mkdir(parents=True)        # the empty placeholder
+    assert link in make_links(tmp_path)
+    assert (tmp_path / link).resolve() == (tmp_path / target).resolve()
+    assert doctor(repo=tmp_path, check_env=False, home=tmp_path / "home") is True
+
+    # and an empty placeholder must never read as [OK]
+    (tmp_path / link).unlink()
+    (tmp_path / link).mkdir()
+    assert doctor(repo=tmp_path, check_env=False, home=tmp_path / "home") is False
+    assert "[MISS] link" in capsys.readouterr().out
+
+
 def test_doctor_skip_groups(tmp_path):
     _touch_all(tmp_path, skip=("EMICA", "Gaze"))
     make_links(tmp_path)
@@ -59,6 +76,25 @@ def test_docs_list_every_model():
     for _, rel, _ in MODELS:
         p = Path(rel)
         assert p.name in docs or p.parent.name in docs, f"{rel} missing from docs/models.md"
+
+
+def test_blackwell_pins_match_frozen_requirements():
+    """Script pins must match the frozen requirements; drift built a broken env."""
+    root = Path(__file__).resolve().parents[1] / "specific_installation"
+    frozen = {}
+    for line in (root / "requirements_blackwell.txt").read_text().splitlines():
+        if "==" in line and not line.lstrip().startswith("#"):
+            name, _, ver = line.strip().partition("==")
+            frozen[name.strip().lower().replace("_", "-")] = ver.split()[0].strip()
+
+    script = (root / "install_blackwell.sh").read_text()
+    mismatched = []
+    for name, ver in frozen.items():
+        for m in re.finditer(rf'(?<![\w.-]){re.escape(name)}==([\w.+]+)', script, re.I):
+            if m.group(1) != ver:
+                mismatched.append(f"{name}: script pins {m.group(1)}, frozen says {ver}")
+    assert not mismatched, "install_blackwell.sh disagrees with requirements_blackwell.txt:\n  " \
+                           + "\n  ".join(mismatched)
 
 
 if __name__ == "__main__":  # ponytail: pytest optional (pytest.raises needs pytest anyway)

@@ -45,7 +45,8 @@ LINKS = [
 ]
 
 IMPORTS = ["torch", "pytorch3d", "smplx", "hmr4d", "hamer", "inferno", "detectron2",
-           "ultralytics", "insightface", "l2cs", "mediapipe", "pytorch_lightning"]
+           "ultralytics", "insightface", "l2cs", "mediapipe", "pytorch_lightning",
+           "mmpose", "h5py"]   # both only surfaced as mid-run crashes
 
 
 def in_env() -> bool:
@@ -59,8 +60,11 @@ def make_links(repo: Path = REPO) -> list[str]:
     made = []
     for link, target in LINKS:
         link_p, target_p = repo / link, repo / target
-        if link_p.exists() or link_p.is_symlink():
+        if link_p.is_symlink() or (link_p.exists() and any(link_p.iterdir())):
             continue
+        # hamer_demo_data.tar.gz ships an EMPTY _DATA/data/mano/ — a placeholder, not a target
+        if link_p.exists():
+            link_p.rmdir()
         link_p.parent.mkdir(parents=True, exist_ok=True)
         link_p.symlink_to(target_p)
         made.append(link)
@@ -113,8 +117,11 @@ def doctor(repo: Path = REPO, env: str | None = None, check_env: bool = True, sk
         ok = resolve(rel, repo, home).exists()
         rows.append(("OK" if ok else "MISS", f"{group}: {rel}", "" if ok else how))
     for link, target in LINKS:
-        p = repo / link
-        ok = p.is_symlink() or p.exists()
+        p, t = repo / link, repo / target
+        if not t.exists():
+            continue      # weights absent or group skipped — the MODELS rows above say so
+        # Not just "path exists": an empty placeholder leaves the submodule without weights
+        ok = p.is_dir() and any(p.iterdir())
         rows.append(("OK" if ok else "MISS", f"link: {link}", "" if ok else f"run `vid2smplx download` (ln -s {target})"))
 
     missing = [r for r in rows if r[0] == "MISS"]

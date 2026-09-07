@@ -166,22 +166,31 @@ echo "  Installing detectron2..."
 pip_install --no-build-isolation \
     "detectron2 @ git+https://github.com/facebookresearch/detectron2"
 
+# Must be the ViTPose fork, not PyPI mmpose: only the fork registers the ViT backbone
+echo "  Installing mmpose (the ViTPose fork HaMeR needs)..."
+pip_install --no-deps --no-build-isolation -e "$REPO_DIR/hamer/third-party/ViTPose"
+pip_install json_tricks munkres terminaltables   # mmpose imports these at module level
+
 echo "  Installing EMICA/Inferno dependencies..."
 pip_install --no-deps --no-build-isolation \
     insightface==0.6.2
 pip_install \
-    "numpy==1.23.5" onnx onnxruntime-gpu prettytable scikit-learn easydict   # numpy pinned: newer onnx pulls numpy 2, breaking insightface/ultralytics
+    "numpy==1.23.5" "onnx==1.20.1" onnxruntime-gpu prettytable scikit-learn easydict   # numpy pinned: newer onnx pulls numpy 2, breaking insightface/ultralytics; onnx pinned: >=1.21 needs protobuf>=4.25
 
+# mediapipe pinned: 1.0 removed the `solutions` API; h5py because hickle needs it
 pip_install --no-deps \
     face-alignment==1.3.5 \
     facenet-pytorch==2.5.2 \
     kornia==0.6.5 \
     albumentations==1.0.3 \
-    mediapipe \
+    mediapipe==0.10.9 \
     munch \
     compress-pickle \
     hickle \
+    h5py \
     decord
+# inferno imports these at module level; wandb pinned (>=0.26 needs protobuf>=5, mediapipe needs <4)
+pip_install imgaug shapely sk-video "wandb==0.25.0" soundfile librosa loguru onnx2torch
 pip_install numba
 
 pip_install \
@@ -191,9 +200,6 @@ pip_install \
 echo "  Installing L2CS-Net (gaze estimation)..."
 pip_install \
     "git+https://github.com/edavalosanaya/L2CS-Net.git@main"
-
-# Safety net: anything above that dragged numpy to 2.x breaks insightface, chumpy and ultralytics
-pip_install "numpy==1.23.5"
 
 echo "  [OK] All pip packages installed"
 echo ""
@@ -215,6 +221,9 @@ pip_install --no-deps --no-build-isolation -e "$REPO_DIR/inferno"
 
 echo "  Installing vid2smplx CLI..."
 pip_install --no-deps -e "$REPO_DIR"
+
+# Must stay LAST: the editable installs above re-resolve deps and undo these pins
+pip_install "numpy==1.23.5" "protobuf==3.20.3"
 
 echo "  [OK] Editable installs complete"
 echo ""
