@@ -20,7 +20,13 @@ pytestmark = pytest.mark.functional
 
 REPO = Path(__file__).resolve().parents[2]
 OUT = Path(__file__).resolve().parent / "out"
-GOLDEN = Path(__file__).resolve().parent / "golden" / "smplx_params.npz"
+GOLDEN_DIR = Path(__file__).resolve().parent / "golden"
+
+
+def golden_path() -> Path:
+    """One golden per torch stack — see docs/onboarding-audit.md."""
+    import torch
+    return GOLDEN_DIR / f"smplx_params_torch{'.'.join(torch.__version__.split('+')[0].split('.')[:2])}.npz"
 SEED = 0
 # (key, trailing shape) — T is the frame count
 NPZ_SPEC = {
@@ -48,8 +54,9 @@ def clip(request) -> Path:
     OUT.mkdir(parents=True, exist_ok=True)
     dst = OUT / f"{src.stem}_{secs:g}s.mp4"
     if not dst.exists():
+        # -c copy: libx264 output differs between ffmpeg builds, making the golden machine-dependent
         subprocess.check_call(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-t", str(secs),
-                               "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-an", str(dst)])
+                               "-c", "copy", "-an", str(dst)])
     return dst
 
 
@@ -166,12 +173,15 @@ def test_visualize(run, params, T):
 
 def test_golden(request, params, run):
     """Compare against the accepted reference. First run: skip and tell the user how to accept."""
+    GOLDEN = golden_path()
     if request.config.getoption("--update-golden"):
         GOLDEN.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy(run / "smplx_params.npz", GOLDEN)
         pytest.skip(f"golden updated: {GOLDEN}")
     if not GOLDEN.exists():
-        pytest.skip(f"no golden yet — eyeball {OUT} then rerun with --update-golden")
+        have = ", ".join(p.name for p in sorted(GOLDEN_DIR.glob("*.npz"))) or "none"
+        pytest.skip(f"no golden for this stack ({GOLDEN.name}); have: {have}. "
+                    f"Eyeball {OUT}, then rerun with --update-golden.")
     ref = dict(np.load(GOLDEN, allow_pickle=True))
     assert int(ref["num_frames"]) == int(params["num_frames"])
     bad = []
@@ -194,7 +204,10 @@ def test_golden(request, params, run):
             mask = ref["face_valid"]
         if mask is not None:
             a, b = a[mask.astype(bool)], b[mask.astype(bool)]
-        err = np.abs(a - b).max() if a.size else 0.0
+        # 99th pct, not max: a single argmax flip in the hand detector moves one
+        # keypoint a whole heatmap cell (~40 px) and rewrites that frame alone.
+        # A real regression shifts every frame, so the percentile still catches it.
+        err = float(np.percentile(np.abs(a - b), 99)) if a.size else 0.0
         if err > tol:
-            bad.append(f"{key}: max abs diff {err:.4f} > {tol}")
+            bad.append(f"{key}: 99th pct abs diff {err:.4f} > {tol}")
     assert not bad, "\n".join(bad)
