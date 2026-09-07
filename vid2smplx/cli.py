@@ -245,6 +245,12 @@ def main(argv: list[str] | None = None) -> None:
         cmd_render(args)
         return
     validate_run_args(args, argv, parser.error)
+    # Repair symlinks before doctor judges them: `download` runs during install, before
+    # the gated weights exist, and re-extracting hamer_demo_data.tar.gz puts an empty
+    # dir back over the link. Idempotent, so it is a no-op once things are correct.
+    from .checks import make_links
+    for made in make_links():
+        print(f"  [link] repaired {made}")
     if not args.skip_doctor:
         from .checks import doctor
         skip = set()
@@ -346,15 +352,6 @@ def quality_report(npz_path: Path, timings: dict, n_hand_det: int | None = None)
 
 
 def cmd_run(args) -> None:
-
-    # Repair the submodule symlinks first. `download` runs during install, before the
-    # registration-gated weights exist, so it links to a target that is not there yet;
-    # re-extracting hamer_demo_data.tar.gz then puts an empty dir back in the way.
-    # Idempotent and instant, and it turns a mid-run "MANO_RIGHT.pkl does not exist"
-    # into nothing at all.
-    from .checks import make_links
-    for made in make_links():
-        print(f"  [link] {made}")
 
     production = not args.full_debug
 
