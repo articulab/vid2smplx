@@ -347,6 +347,15 @@ def quality_report(npz_path: Path, timings: dict, n_hand_det: int | None = None)
 
 def cmd_run(args) -> None:
 
+    # Repair the submodule symlinks first. `download` runs during install, before the
+    # registration-gated weights exist, so it links to a target that is not there yet;
+    # re-extracting hamer_demo_data.tar.gz then puts an empty dir back in the way.
+    # Idempotent and instant, and it turns a mid-run "MANO_RIGHT.pkl does not exist"
+    # into nothing at all.
+    from .checks import make_links
+    for made in make_links():
+        print(f"  [link] {made}")
+
     production = not args.full_debug
 
     if args.seed is not None:
