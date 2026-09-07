@@ -107,9 +107,9 @@ conda run -n "$ENV_NAME" --no-capture-output pip install --no-build-isolation \
 echo "  Installing core dependencies..."
 conda run -n "$ENV_NAME" --no-capture-output pip install \
     numpy==1.26.4 \
-    opencv-python \
+    "opencv-python<5" \
     smplx==0.1.28 \
-    trimesh \
+    "trimesh<5" \
     einops \
     timm==1.0.25 \
     lightning==2.3.0 \
@@ -144,7 +144,7 @@ conda run -n "$ENV_NAME" --no-capture-output pip install \
     pyrender \
     yacs \
     xtcocotools \
-    pandas \
+    "pandas<3" \
     webdataset
 
 echo "  Building detectron2 from source..."
@@ -152,6 +152,7 @@ conda run -n "$ENV_NAME" --no-capture-output pip install --no-build-isolation \
     "detectron2 @ git+https://github.com/facebookresearch/detectron2"
 
 echo "  Installing EMICA/Inferno dependencies..."
+conda run -n "$ENV_NAME" --no-capture-output pip install cython   # insightface sdist imports Cython
 conda run -n "$ENV_NAME" --no-capture-output pip install --no-deps --no-build-isolation \
     insightface==0.7.3
 conda run -n "$ENV_NAME" --no-capture-output pip install \
@@ -172,11 +173,12 @@ conda run -n "$ENV_NAME" --no-capture-output pip install numba
 # inferno imports these at module level
 conda run -n "$ENV_NAME" --no-capture-output pip install \
     imgaug shapely sk-video "wandb==0.25.1" soundfile librosa loguru h5py onnx2torch \
+    absl-py attrs flatbuffers opencv-contrib-python sounddevice \
     "albucore==0.0.24"   # albumentations 2.x split its core out; we install it --no-deps
 
 conda run -n "$ENV_NAME" --no-capture-output pip install \
     "transformers<5" \
-    huggingface-hub
+    "huggingface-hub<1"
 
 echo "  Installing L2CS-Net (gaze estimation)..."
 conda run -n "$ENV_NAME" --no-capture-output pip install \

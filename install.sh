@@ -63,7 +63,8 @@ echo "=== Phase 1/6: Git Submodules ==="
 cd "$REPO_DIR"
 
 # Init top-level submodules (GVHMR, hamer, inferno) without recursing
-if [ -f GVHMR/setup.py ] && [ -f hamer/setup.py ] && [ -f inferno/setup.py ]; then
+if [ -f GVHMR/setup.py ] && [ -f hamer/setup.py ] && [ -f inferno/setup.py ] \
+   && [ -f hamer/third-party/ViTPose/setup.py ]; then
     echo "  [OK] Submodules already present"
 else
     git submodule update --init GVHMR hamer inferno
@@ -96,6 +97,7 @@ if [ "$USE_UV" -eq 1 ]; then
 else
     if [ "$FORCE" -eq 1 ]; then
         echo "  [--force] Removing existing environment..."
+        [ "${CONDA_DEFAULT_ENV:-}" = "$ENV_NAME" ] && { echo "  deactivate $ENV_NAME first"; exit 1; }
         conda env remove -n "$ENV_NAME" -y 2>/dev/null || true
     fi
     if conda env list | grep -q "^${ENV_NAME} "; then
@@ -122,9 +124,9 @@ pip_install \
 echo "  Installing core dependencies..."
 pip_install \
     numpy==1.23.5 \
-    opencv-python \
+    "opencv-python<5" \
     smplx==0.1.28 \
-    trimesh \
+    "trimesh<5" \
     einops \
     timm==0.9.12 \
     lightning==2.3.0 \
@@ -159,7 +161,7 @@ pip_install \
     pyrender \
     yacs \
     xtcocotools \
-    pandas \
+    "pandas<3" \
     webdataset
 
 echo "  Installing detectron2..."
@@ -172,6 +174,7 @@ pip_install --no-deps --no-build-isolation -e "$REPO_DIR/hamer/third-party/ViTPo
 pip_install json_tricks munkres terminaltables   # mmpose imports these at module level
 
 echo "  Installing EMICA/Inferno dependencies..."
+pip_install cython   # insightface builds from sdist and imports Cython in setup.py
 pip_install --no-deps --no-build-isolation \
     insightface==0.6.2
 pip_install \
@@ -190,12 +193,13 @@ pip_install --no-deps \
     h5py \
     decord
 # inferno imports these at module level; wandb pinned (>=0.26 needs protobuf>=5, mediapipe needs <4)
-pip_install imgaug shapely sk-video "wandb==0.25.0" soundfile librosa loguru onnx2torch
+pip_install imgaug shapely sk-video "wandb==0.25.0" soundfile librosa loguru onnx2torch \
+    absl-py attrs flatbuffers opencv-contrib-python sounddevice   # mediapipe deps, dropped by --no-deps
 pip_install numba
 
 pip_install \
     "transformers<5" \
-    huggingface-hub
+    "huggingface-hub<1"
 
 echo "  Installing L2CS-Net (gaze estimation)..."
 pip_install \
@@ -241,13 +245,16 @@ echo ""
 
 # ---- Phase 6: Verify ----
 echo "=== Phase 6/6: Verification (vid2smplx doctor) ==="
-# Import/CUDA breakage fails the install (set -e); missing manual weights (SMPL-X/MANO) do not.
+# A broken import fails the install (set -e). A missing GPU or ffmpeg only warns:
+# both are host facts, not install errors, and this runs on GPU-less build hosts too.
 in_env python -c "
 from vid2smplx.checks import _check_env
 import sys
 rows = _check_env('')
-bad = [r for r in rows if r[0] == 'MISS']
-for _, name, note in bad: print(f'  [FAIL] {name}: {note}')
+bad  = [r for r in rows if r[0] == 'MISS' and r[1] not in ('cuda', 'ffmpeg')]
+warn = [r for r in rows if r[0] == 'MISS' and r[1] in ('cuda', 'ffmpeg')]
+for _, name, note in warn: print(f'  [WARN] {name}: {note}')
+for _, name, note in bad:  print(f'  [FAIL] {name}: {note}')
 sys.exit(1 if bad else 0)
 "
 in_env vid2smplx doctor || true

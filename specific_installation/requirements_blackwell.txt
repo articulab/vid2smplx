@@ -1,3 +1,8 @@
+# REFERENCE FREEZE - NOT INSTALLABLE AS-IS.
+# This is `pip freeze` from a working Blackwell env, kept so exact versions and
+# commits can be looked up and diffed. It cannot be fed to `pip install -r`:
+# it contains a local file:/// build path and git+ssh URLs with relative
+# subdirectories. Use specific_installation/install_blackwell.sh instead.
 absl-py==2.4.0
 addict==2.4.0
 aiohappyeyeballs==2.6.1

@@ -64,7 +64,8 @@ conda activate vid2smplx_bw
 CONDA_ENV=vid2smplx_bw vid2smplx doctor
 ```
 
-If dependency resolution fails, `pip install -r specific_installation/requirements_blackwell.txt` gives the frozen set.
+`specific_installation/requirements_blackwell.txt` records the exact versions of a working
+env for reference — it is a `pip freeze`, not installable (local paths, ssh URLs).
 Differences vs the main env: torch 2.10+cu128, numpy 1.26.4 and the newer insightface/albumentations
 that requires, `setuptools<71` (mmcv needs `pkg_resources`), a conda `cuda-toolkit` for the source
 builds, and HaMeR loads models lazily so 8 GB VRAM works. `MAX_JOBS` caps build parallelism
