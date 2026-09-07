@@ -28,8 +28,7 @@ Afterwards `conda activate vid2smplx` or `source .venv/bin/activate` — the `vi
 detects that it is inside the env and runs steps directly (outside any env it falls back to `conda run -n $CONDA_ENV`).
 
 `install.sh` ends by running `vid2smplx doctor`. It will report `[MISS]` for the two files that need
-a (free) registration (**SMPL-X**, incl. `MANO_SMPLX_vertex_ids.pkl`, and **MANO**), and often for
-**L2CSNet_gaze360.pkl**, which gdown rate-limits. Follow the links it prints — details in [models.md](models.md) — then:
+a (free) registration: **SMPL-X** (incl. `MANO_SMPLX_vertex_ids.pkl`) and **MANO**. Follow the links it prints — details in [models.md](models.md) — then:
 
 ```bash
 conda activate vid2smplx
@@ -78,7 +77,7 @@ Flags: `--skip-models`, `--env-only`, `--force`, and `CONDA_ENV=name` to build i
 |---------|-----|
 | `doctor` says `conda env 'vid2smplx' not found` | run `install.sh`, or `export CONDA_ENV=<name>` if you used another env name |
 | `[MISS] link: ...` | `vid2smplx download` recreates the symlinks |
-| `L2CSNet_gaze360.pkl` missing | gdown is rate-limited; download from the Drive link by hand into `models/` |
+| `L2CSNet_gaze360.pkl` missing | `vid2smplx download` fetches it from a mirror; by hand: `wget -O models/L2CSNet_gaze360.pkl https://huggingface.co/ymachta/articumotion-checkpoints/resolve/main/mirrors/L2CSNet_gaze360.pkl` |
 | CUDA out of memory in HaMeR | `--batch-size 16` |
 | IK step exits with `IK_COVERAGE_LOW` | too few frames with visible hands; rerun with `--no-hands` or a different clip |
 | Video > 1080p | it is downscaled automatically to `output/.downscaled/`; nothing to do |

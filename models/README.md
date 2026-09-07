@@ -11,11 +11,16 @@
 | EMICA | `~/.insightface/models/antelopev2/` | auto (inferno hard-codes this location) |
 | EMICA | `inferno/assets/FLAME/geometry/generic_model.pkl` | auto (`FLAME.zip` from EMOCA, unzipped into `inferno/assets/`) |
 | Hands | `models/mediapipe/hand_landmarker.task` | auto |
-| Gaze | `models/L2CSNet_gaze360.pkl` | `gdown` tries; else download manually from [Google Drive](https://drive.google.com/drive/folders/17p6ORr-JQJcw-eYtG2WGNiuS_qVKwdWd) into `models/` |
+| Gaze | `models/L2CSNet_gaze360.pkl` | auto (mirror; the upstream Drive folder 404s) |
 | SMPL-X | `models/smplx/SMPLX_NEUTRAL.npz`, `models/smplx/MANO_SMPLX_vertex_ids.pkl` | **manual** — register at https://smpl-x.is.tue.mpg.de/, download *SMPL-X v1.1 (NPZ)*. Both files are in the archive; the IK stage fails without the vertex ids |
 | MANO | `models/mano/MANO_RIGHT.pkl` (+ `MANO_LEFT.pkl`) | **manual** — register at https://mano.is.tue.mpg.de/, download *MANO v1.2*, unzip into `models/mano/` |
 
 Registration is free for research use. ~15 GB total.
+
+The gaze weight is mirrored because the upstream Google Drive folder now 404s:
+`https://huggingface.co/ymachta/articumotion-checkpoints/resolve/main/mirrors/L2CSNet_gaze360.pkl`
+(95,849,977 bytes, md5 `a0fb3d74cab1ab1a4435876be5483321`; `vid2smplx download` fetches
+and checksums it automatically).
 
 `models/` starts empty (git ignores its subdirectories), so create the folders first:
 `mkdir -p models/smplx models/mano`. The SMPL-X archive expands to a nested

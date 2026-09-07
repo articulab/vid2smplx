@@ -28,7 +28,7 @@ MODELS = [
     ("EMICA", "~/.insightface/models/antelopev2/scrfd_10g_bnkps.onnx", "auto (inferno loads insightface from ~/.insightface)"),
     ("Hands", "models/mediapipe/hand_landmarker.task", "auto"),
     ("Gaze", "models/L2CSNet_gaze360.pkl",
-     "gdown or manual: https://drive.google.com/drive/folders/17p6ORr-JQJcw-eYtG2WGNiuS_qVKwdWd -> models/"),
+     "auto; or fetch by hand: https://huggingface.co/ymachta/articumotion-checkpoints/resolve/main/mirrors/L2CSNet_gaze360.pkl"),
     ("SMPL-X", "models/smplx/SMPLX_NEUTRAL.npz",
      "register at https://smpl-x.is.tue.mpg.de/ (SMPL-X v1.1 NPZ) -> unzip to models/smplx/"),
     # ik_hands.py raises FileNotFoundError without this; ships in the same SMPL-X archive

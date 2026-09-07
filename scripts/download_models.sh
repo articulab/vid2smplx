@@ -145,17 +145,16 @@ L2CS_WEIGHTS="$REPO_DIR/models/L2CSNet_gaze360.pkl"
 if [ -f "$L2CS_WEIGHTS" ]; then
     echo "  [SKIP] Already exists: $L2CS_WEIGHTS"
 else
-    echo "  L2CS-Net weights must be downloaded manually from Google Drive:"
-    echo "    https://drive.google.com/drive/folders/17p6ORr-JQJcw-eYtG2WGNiuS_qVKwdWd"
-    echo "  Download L2CSNet_gaze360.pkl and place it at:"
-    echo "    $L2CS_WEIGHTS"
-    echo ""
-    echo "  Attempting download with gdown..."
-    if command -v gdown &>/dev/null; then
-        gdown --folder "17p6ORr-JQJcw-eYtG2WGNiuS_qVKwdWd" -O "$REPO_DIR/models/" 2>/dev/null || true
-        [ -f "$L2CS_WEIGHTS" ] || echo "  [WARN] gdown could not fetch it (Google Drive rate-limits folder listings) - download manually, see above"
-    else
-        echo "  [WARN] gdown not installed - please download manually"
+    # Mirror: the upstream Drive folder 404s, and gdown was rate-limited anyway
+    L2CS_URL="https://huggingface.co/ymachta/articumotion-checkpoints/resolve/main/mirrors/L2CSNet_gaze360.pkl"
+    L2CS_MD5="a0fb3d74cab1ab1a4435876be5483321"
+    echo "  Downloading from mirror..."
+    wget -q --show-progress -O "$L2CS_WEIGHTS.part" "$L2CS_URL" && mv "$L2CS_WEIGHTS.part" "$L2CS_WEIGHTS" \
+        || { rm -f "$L2CS_WEIGHTS.part"; echo "  [WARN] download failed - fetch manually: $L2CS_URL"; }
+    if [ -f "$L2CS_WEIGHTS" ]; then
+        got=$(md5sum "$L2CS_WEIGHTS" | cut -d" " -f1)
+        [ "$got" = "$L2CS_MD5" ] && echo "  [OK] L2CSNet_gaze360.pkl (md5 verified)" \
+            || echo "  [WARN] md5 mismatch: got $got, expected $L2CS_MD5"
     fi
 fi
 echo ""
