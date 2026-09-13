@@ -50,13 +50,41 @@ def test_gaze_blink_unreadable_video_exits_non_zero(tmp_path):
                         "--video", str(bogus), "--out_folder", str(tmp_path / "out")],
                        capture_output=True, text=True, cwd=str(SCRIPTS))
     assert r.returncode != 0, f"unreadable video exited 0:\n{r.stdout}\n{r.stderr}"
+    # rc != 0 alone would also be satisfied by an ImportError in a broken env, which would
+    # make this test pass while proving nothing about the guard it exists for.
+    out = r.stdout + r.stderr
+    assert "Cannot open video" in out and str(bogus) in out, \
+        f"exited non-zero for some other reason than the unreadable video:\n{out}"
+    assert "Traceback" not in out, f"the user got a traceback, not an actionable line:\n{out}"
 
 
-def test_cli_never_prints_ok_for_a_missing_path():
-    """The [OK] lines for hands and gaze must be guarded by the artifact actually existing."""
-    src = (REPO / "vid2smplx" / "cli.py").read_text()
-    assert 'if hands_present():\n            print(f"  [OK] Hand params: {hamer_params}")' in src
-    assert 'if gaze_blink_result.exists():\n            print(f"  [OK] Gaze+Blink:' in src
+def test_cli_never_prints_ok_for_a_missing_path(tmp_path, monkeypatch, capsys):
+    """A stage that exits 0 but writes nothing must not be reported as [OK] with a path.
+
+    Driven through cmd_run with every child stubbed to "succeeded, wrote nothing" -- the exact
+    shape of the HaMeR bug -- so this fails on the behaviour, not on cli.py's formatting.
+    """
+    from vid2smplx import cli
+    from test_cli import _seed_finished_run     # the shared fully-stubbed run fixture
+
+    video, out_base, _calls = _seed_finished_run(tmp_path, monkeypatch, with_hands=False)
+    for p in (out_base / video.stem / "gaze_blink" / video.stem / "gaze_blink.npz",):
+        if p.exists():
+            p.unlink()
+
+    args = cli.build_parser().parse_args(["run", str(video), "--output-dir", str(out_base),
+                                          "--skip-doctor"])
+    cli.cmd_run(args)
+    out = capsys.readouterr().out
+
+    for line in out.splitlines():
+        if "[OK]" not in line:
+            continue
+        for token in line.split():
+            if "/" in token and token.startswith(str(tmp_path)):
+                assert Path(token).exists(), f"[OK] named a path that is not on disk: {line}"
+    assert "[WARN] HaMeR finished but saved no hand params" in out, \
+        f"a stage produced nothing and said nothing about it:\n{out}"
 
 
 # ---- EMICA must not fabricate faces ----
@@ -170,3 +198,57 @@ def test_a_golden_without_bbox_stale_still_merges(tmp_path):
     out = mod.merge(_fake_gvhmr(tmp_path), None, tmp_path / "smplx.npz",
                     flame_result=_flame_npz(tmp_path, [0, 1, 2]))
     assert list(out["face_valid"][:3]) == [True, True, True]
+
+
+# ---- the same rule, one stage over: gaze from a crop nobody detected a face in ----
+
+def _gaze_npz(tmp_path, timesteps, stale=None):
+    n = len(timesteps)
+    d = {"gaze_pitch": np.zeros(n, np.float32), "gaze_yaw": np.zeros(n, np.float32),
+         "blink_left": np.zeros(n, np.float32), "blink_right": np.zeros(n, np.float32),
+         "timestep_id": np.array(timesteps, np.int64)}
+    if stale is not None:
+        d["bbox_stale"] = np.array(stale, bool)
+    p = tmp_path / "gaze_blink.npz"
+    np.savez(p, **d)
+    return p
+
+
+def test_the_detection_cache_round_trips_which_boxes_were_carried_forward(monkeypatch, tmp_path):
+    """EMICA writes this cache and gaze/blink crops from it. If `stale` does not survive the
+    round trip, gaze cannot tell a detected face from a box carried in from five frames back."""
+    utils = _load("utils")
+    _mod, (_c, _n, bboxes, valid, stale) = _run_detect(
+        monkeypatch, [True] + [False] * 5, tmp_path)
+    assert any(stale), "the fixture produced no carried-forward frames to test with"
+
+    cache = tmp_path / "_detection_cache.npz"
+    utils.save_detection_cache(cache, bboxes, valid, stale)
+    boxes, stale_frames = utils.load_detection_cache(cache)
+
+    assert set(boxes) == set(valid)
+    assert stale_frames == {t for t, st in zip(valid, stale) if st}
+
+
+def test_a_detection_cache_written_before_stale_existed_reads_as_all_fresh(tmp_path):
+    """Old runs on disk must keep working, with the meaning they originally claimed."""
+    utils = _load("utils")
+    cache = tmp_path / "old_cache.npz"
+    np.savez(cache, bboxes=np.zeros((3, 4)), valid_indices=np.array([0, 1, 2]))
+    boxes, stale_frames = utils.load_detection_cache(cache)
+    assert set(boxes) == {0, 1, 2} and stale_frames == set()
+
+
+def test_gaze_on_a_stale_bbox_is_not_marked_valid(tmp_path):
+    mod = _load("merge_body_hands")
+    out = mod.merge(_fake_gvhmr(tmp_path), None, tmp_path / "smplx.npz",
+                    gaze_blink_result=_gaze_npz(tmp_path, [0, 1, 2], [False, True, True]))
+    assert list(out["gaze_valid"][:3]) == [True, False, False]
+
+
+def test_gaze_without_bbox_stale_still_merges(tmp_path):
+    """Pre-existing gaze_blink.npz files have no such key; they must keep loading."""
+    mod = _load("merge_body_hands")
+    out = mod.merge(_fake_gvhmr(tmp_path), None, tmp_path / "smplx.npz",
+                    gaze_blink_result=_gaze_npz(tmp_path, [0, 1, 2]))
+    assert list(out["gaze_valid"][:3]) == [True, True, True]

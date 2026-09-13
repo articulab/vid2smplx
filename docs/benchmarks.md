@@ -49,16 +49,17 @@ does keep growing (3.78 GiB at 35,755 vs ~1.3 GiB at 12,526), so some rise above
 expected. Re-running a 20-min clip is the single most useful missing measurement.
 
 Budget **~14 GB to be safe at any length**; that bound is what the ~16 GB recommendation rests on,
-and it is now conservative for anything up to ~12k frames.
+and it is now conservative for anything up to ~12k frames, where 9.7 GB is the measured figure.
 
 | you have | you can run | basis |
 |---|---|---|
-| 8 GB | short clips (measured to 369 frames) | MEASURED |
-| ~16 GB | any length that fits in wall time | INFERRED — the ~14 GB bound is the whole stage, but no 16 GB run of a 20-min video exists |
-| 45 GB+ (rtx8000, a100, h100) | any length | MEASURED to 35,755 frames |
+| 8 GB | up to 12,526 frames | MEASURED end-to-end to 369 frames (5.1 GB); INFERRED beyond, from the flat 9.7 GB GVHMR sweep and the fact that batches shrink to the card |
+| ~16 GB | any length that fits in wall time | INFERRED — the 13.7 GB upper bound is the whole stage, but no 16 GB run of a 20-min video exists |
+| 45 GB+ (rtx8000, a100, h100) | any length | MEASURED to 35,755 frames (pre-`ea4ba35`) |
 
-`vid2smplx run` preflights this (`checks.py: vram_warning`) and warns — never refuses — when the
-estimate exceeds the card.
+`vid2smplx run` preflights this (`checks.py: vram_warning`) and warns — never refuses — and only
+past 12,526 frames on a card under ~16 GB. It does **not** try to estimate your peak from the
+frame count: peak follows the card, so that number would be fiction.
 
 ## Stage timings
 
@@ -117,18 +118,19 @@ mask; `RoPEAttention` then materialised a full `(B, heads, L, L)` fp32 score ten
 MEASURED on cleps with `P001_S01_BP.mp4` (1920×1080, 25 fps), on a Quadro RTX 8000.
 **Taken before GVHMR `ea4ba35`**, when batches were sized against the card's TOTAL memory; with
 free-VRAM sizing the short-clip rows come out lower (re-measured 2026-09-13: 9,963 MiB at 727
-frames, not 13.7 GB). The long rows are unaffected — they are the ones the fix was about, and
-13.7 GB remains the ceiling.
+frames, not 13.7 GB). **Every 13.7 GB figure in the table below is therefore superseded** by the
+9.7 GB sweep above for lengths up to 12,526 frames. Only the 35,755-frame row has not been
+re-measured, so 13.7 GB survives solely as an **upper bound** at 20 min on a 46 GB card.
 
 | Frames | GVHMR peak VRAM | Result |
 |---:|---:|---|
-| 721 | 13.7 GB | rc=0 |
-| 1,793 | 13.7 GB | rc=0 |
-| 3,581 | 13.7 GB | rc=0 |
-| 7,157 | 13.7 GB | rc=0 |
-| 12,520 | 13.7 GB | rc=0 |
+| 721 | 13.7 GB (superseded: 9.7 GB post-`ea4ba35`) | rc=0 |
+| 1,793 | 13.7 GB (superseded) | rc=0 |
+| 3,581 | 13.7 GB (superseded: 9.7 GB at 3,587) | rc=0 |
+| 7,157 | 13.7 GB (superseded) | rc=0 |
+| 12,520 | 13.7 GB (superseded: 9.7 GB at 12,526) | rc=0 |
 | 35,755 (20 min), **before** the fix | — | **OOM**: `Tried to allocate 38.10 GiB` on a Quadro RTX 8000 (45,364 MB), full pipeline, `RUN_EXIT=1` |
-| **35,755** (20 min), **after** the fix | **13,710 MiB** | **rc=0** on the same Quadro RTX 8000, 1 h 18 m wall |
+| **35,755** (20 min), **after** the fix | **13,710 MiB** — pre-`ea4ba35`, an **upper bound**, never re-measured | **rc=0** on the same Quadro RTX 8000, 1 h 18 m wall |
 
 That 38.10 GiB was never the mask. The mask is bool and only 1.19 GiB at L=35,755, and
 `expand` makes it a view, so it costs nothing extra. The 38.10 GiB is the *score* tensor:
@@ -145,8 +147,9 @@ score matrix is never built. Standalone, at the shapes GVHMR uses, on an rtx8000
 | 16,000 | 15.60 GiB | 0.81 GiB |
 | 35,755 | **OOM at 38.10 GiB** | **3.78 GiB** |
 
-3.78 GiB sits under the 13.7 GB the ViT stages already hold, so it no longer moves the peak
-at all — hence the flat 13,710 MiB across the whole measured range.
+3.78 GiB sits under what the ViT stages already hold, so it no longer moves the peak at all —
+hence a peak that is flat in clip length rather than quadratic (9.7 GB to 12,526 frames post-fix;
+13,710 MiB at 35,755, pre-fix and not re-measured).
 
 ### How much the numbers move
 
@@ -178,13 +181,19 @@ cross-machine drift plus different upstream detections (YOLO/ViTPose/HMR2 on Tur
 
 **What this means for GPU choice** (see also `docs/CLEPS_SETUP.md` §2.3):
 
-- **Measured:** 721 → 35,755 frames all peak at 13.7 GB and return rc=0 on a 45 GB rtx8000.
-- **Inferred, not measured:** a 16 GB card should now handle a 20-min video, since 13.7 GB is
-  the whole stage. No 16 GB run of a 20-min video exists.
+- **Measured, current:** 727 → 12,526 frames all peak at **9.7 GB** and return rc=0 on a 45 GB
+  rtx8000 (post-`ea4ba35`).
+- **Upper bound, not re-measured:** 35,755 frames peaked at 13,710 MiB on the same card *before*
+  `ea4ba35`. The one post-fix attempt at 35,024 frames failed 27 min in and its log was lost, so
+  there is **no post-fix 20-min measurement at all** — do not read the older rows as one.
+- **Inferred, not measured:** a 16 GB card should handle a 20-min video, since 13.7 GB is the
+  whole stage. No 16 GB run of a 20-min video exists.
 - **Measured, historical:** h100 (80 GB) completes 20-min videos; 80 of the corpus logs are
   H100 NVL runs, made before this fix.
 
-The practical rule is now just: ~16 GB, at any clip length that fits in wall time.
+The practical rule: **8 GB up to 12,526 frames** (measured), **~16 GB beyond** (the 13.7 GB
+upper bound plus headroom). `checks.py` warns on exactly that boundary and nowhere else —
+peak follows the card, so frame count alone cannot predict it.
 
 ### Rejected alternatives
 

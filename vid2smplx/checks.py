@@ -58,60 +58,57 @@ LINKS = [
     ("EMICA", "inferno/assets/MICA", "models/inferno/mica"),
 ]
 
-# The FLOOR, not the typical peak: batches are sized from free VRAM (auto_batch.py), so the same
-# clip measured 5.1 GB on an 8 GB card and 12.3 GB on a 46 GB one. Long video wants ~16 GB --
-# that is vram_warning's job below. README and docs/install.md must state this same number.
+# The documented FLOOR. Batches are sized from free VRAM (auto_batch.py), so the same clip
+# measured 5.1 GB on an 8 GB card and 12.3 GB on a 46 GB one -- the card sets the peak, not the
+# clip. 8 GB is the smallest card we have a measured end-to-end success on.
+# README and docs/install.md must state this same number.
 MIN_VRAM_GB = 8
 
-# Measured peak VRAM, in frames -> GB. Every number here is an OBSERVED peak from
-# docs/benchmarks.md -- nothing is interpolated or extrapolated, and the estimate below
-# only ever reads the first row whose frame count covers the clip.
-#   369    5.1  full pipeline, 8 GB RTX PRO 1000  (the same clip peaks 12.3 GB on a 46 GB card)
-#   12526  9.7  GVHMR only, 46 GB rtx8000, flat across 727 / 3,587 / 12,526
-#   35755 13.7  GVHMR only, 46 GB rtx8000, pre-ea4ba35 ceiling -- the largest figure we hold
-# Peak follows the CARD, not just the length: every stage sizes its batches from free VRAM
-# (auto_batch.py), so a big card spends more on the same clip. An estimate keyed on frames
-# alone is therefore approximate, and this ladder takes the SMALL-card figure where one
-# exists -- it is the one that decides whether an 8 GB card can do the job.
-VRAM_LADDER = ((369, 5.1), (12_526, 9.7), (35_755, 13.7))
+# What we recommend once a clip runs past everything the small-card evidence covers.
+# README, docs/install.md and docs/benchmarks.md must state this same number.
+LONG_VIDEO_VRAM_GB = 16
 
-GVHMR_BASE_GB = VRAM_LADDER[-1][1]    # the ceiling, for lengths at or under the measured max
-GVHMR_MEASURED_TO_FRAMES = VRAM_LADDER[-1][0]
-
-# Banded attention peak, measured standalone on rtx8000 at the same shapes GVHMR uses
-# (8 heads x 64 dims, 2048-frame query blocks): 0.81 GiB at 16k frames, 3.78 GiB at 35,755.
-# It sits under what the ViT stages already hold, so it does not move the peak; kept as a
-# term so the estimate still rises beyond anything measured.
-GVHMR_BAND_GB_PER_FRAME = 3.78 / 35755
+# The longest clip for which we hold a measured, successful GVHMR peak (9.7 GB, rtx8000,
+# flat across 727 / 3,587 / 12,526 frames). Past it the only figure we have is the
+# pre-`ea4ba35` 13.7 GB at 35,755 frames, which is an UPPER BOUND on a 46 GB card and has
+# never been reproduced on a small one -- so past it we recommend, we do not estimate.
+MEASURED_TO_FRAMES = 12_526
 
 
-def gvhmr_vram_estimate_gb(frames: int) -> float:
-    """Approximate peak VRAM on `frames` frames: the lowest measured point that covers it."""
-    for upto, gb in VRAM_LADDER:
-        if frames <= upto:
-            return gb
-    return GVHMR_BASE_GB + GVHMR_BAND_GB_PER_FRAME * float(frames)
+def recommended_vram_gb(frames: int) -> int:
+    """The card size we can stand behind for a clip of `frames` frames.
+
+    Deliberately NOT an estimate of peak usage: peak follows the CARD (every heavy stage sizes
+    its batch from free VRAM), so frame count alone cannot predict it. This returns the
+    documented recommendation, which is what the user can act on.
+    """
+    return MIN_VRAM_GB if frames <= MEASURED_TO_FRAMES else LONG_VIDEO_VRAM_GB
 
 
 def vram_warning(frames: int, available_gb: float) -> str:
-    """'' when the clip should fit, else an actionable warning. Estimate, so never fatal."""
+    """'' when this card is one we recommend for this clip, else an actionable warning.
+
+    Fires only past the measured range: we have no recorded OOM on any supported card inside it
+    (158 corpus run logs, zero OOM lines), and a warning that fires on hardware the docs call
+    supported only teaches people to ignore it.
+    """
     if not frames or available_gb <= 0:
         return ""
-    need = gvhmr_vram_estimate_gb(frames)
-    if need <= available_gb * 0.95:
+    want = recommended_vram_gb(frames)
+    if available_gb >= want * 0.95:
         return ""
-    # Name a card that the ladder says actually covers this clip, rather than a fixed 16 GB.
     return (
-        f"This clip is {frames:,} frames and the pipeline needs an estimated {need:.1f} GB of "
-        f"VRAM, but this GPU has {available_gb:.0f} GB. GVHMR is the longest stage — on a 20-min "
-        f"video it can run for over an hour before failing.\n"
-        f"  Do one of these instead:\n"
-        f"    - run on a GPU with at least ~{max(8, int(need) + 2)} GB, or\n"
+        f"This clip is {frames:,} frames, past the {MEASURED_TO_FRAMES:,} we have measured "
+        f"(9.7 GB, rtx8000), and this GPU has {available_gb:.0f} GB. We recommend "
+        f"~{want} GB beyond that point: the only longer figure on record is 13.7 GB at 35,755 "
+        f"frames on a 46 GB card, and it is an upper bound, not a measurement of what a small "
+        f"card needs. Peak VRAM follows the CARD, not the clip length -- every heavy stage "
+        f"sizes its batch from free VRAM -- so we cannot predict your peak from frame count.\n"
+        f"  If it does run out of memory:\n"
+        f"    - use a GPU with at least ~{want} GB, or\n"
         f"    - cut the video into pieces and process them separately.\n"
-        f"  Memory is roughly FLAT in clip length (5.1 GB at 369 frames on an 8 GB card, 9.7 GB "
-        f"to 12,526 frames, 13.7 GB at 35,755 — docs/benchmarks.md); it used to be quadratic. "
-        f"Peak also follows the CARD, since batches size to free VRAM, so this figure is "
-        f"approximate. It is a warning, not a refusal."
+        f"  GVHMR is the longest stage: on a 20-min video it can run over an hour before "
+        f"failing. See docs/benchmarks.md. It is a warning, not a refusal."
     )
 
 

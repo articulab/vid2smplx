@@ -20,7 +20,8 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from utils import LEFT_EYE_EAR, RIGHT_EYE_EAR, crop_face, save_npz_atomic
+from utils import (LEFT_EYE_EAR, RIGHT_EYE_EAR, crop_face, load_detection_cache,
+                   save_npz_atomic)
 
 
 # ---------------------------------------------------------------------------
@@ -176,12 +177,11 @@ def main() -> None:
     print(f"Output: {out_dir}")
 
     # Load EMICA detection cache if available
-    emica_bbox_map = {}
+    emica_bbox_map, emica_stale = {}, set()   # emica_stale: box carried forward, not detected
     if args.emica_cache and Path(args.emica_cache).exists():
-        cache = np.load(args.emica_cache, allow_pickle=True)
-        for i, idx in enumerate(cache["valid_indices"]):
-            emica_bbox_map[int(idx)] = cache["bboxes"][i]
-        print(f"  Loaded EMICA cache: {len(emica_bbox_map)} face bboxes")
+        emica_bbox_map, emica_stale = load_detection_cache(args.emica_cache)
+        print(f"  Loaded EMICA cache: {len(emica_bbox_map)} face bboxes "
+              f"({len(emica_stale)} carried forward from a nearby detection)")
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -214,6 +214,7 @@ def main() -> None:
     gaze_pitches = np.zeros(total_frames, dtype=np.float32)
     gaze_yaws = np.zeros(total_frames, dtype=np.float32)
     valid_mask = np.zeros(total_frames, dtype=bool)
+    bbox_stale = np.zeros(total_frames, dtype=bool)   # gaze computed from an unverified crop
 
     batch_buffer = []
     batch_frame_ids = []
@@ -234,7 +235,7 @@ def main() -> None:
         # full-frame pixels, so EAR is identical to the full-frame result.
         pts_px = None
         roi = (roi_from_bbox(emica_bbox_map[frame_idx], w, h)
-               if frame_idx in emica_bbox_map else None)
+               if frame_idx in emica_bbox_map and frame_idx not in emica_stale else None)
         if roi is not None:
             rx0, ry0, rx1, ry1 = roi
             sub = np.ascontiguousarray(frame_rgb[ry0:ry1, rx0:rx1])
@@ -256,7 +257,7 @@ def main() -> None:
             valid_mask[frame_idx] = True
 
         bbox = None
-        if frame_idx in emica_bbox_map:
+        if frame_idx in emica_bbox_map and frame_idx not in emica_stale:
             bbox = emica_bbox_map[frame_idx]
         elif pts_px is not None:
             margin = 0.15
@@ -270,6 +271,11 @@ def main() -> None:
                 d = det_results.detections[0].location_data.relative_bounding_box
                 bbox = [d.xmin * w, d.ymin * h,
                         (d.xmin + d.width) * w, (d.ymin + d.height) * h]
+        if bbox is None and frame_idx in emica_bbox_map:
+            # Last resort: the carried-forward box. Nothing verified a face is in it this
+            # frame, so the gaze it produces ships MARKED, never silently.
+            bbox = emica_bbox_map[frame_idx]
+            bbox_stale[frame_idx] = True
 
         if bbox is not None:
             # crop_face returns (3, H, W) float32 [0,1] — normalize directly
@@ -300,6 +306,10 @@ def main() -> None:
 
     print(f"  Read + blink + gaze: {time.time() - t_read:.1f}s ({n_crops} face crops)")
     print(f"  FaceMesh: {n_roi} on EMICA ROI (fast), {n_fullframe} full-frame (fallback)")
+    n_stale = int(bbox_stale.sum())
+    if n_stale:
+        print(f"  [WARN] {n_stale} frames had no face detected: their gaze comes from a "
+              f"carried-forward crop and is flagged `bbox_stale` in gaze_blink.npz.")
 
     # Build output
     valid_indices = np.where(valid_mask)[0]
@@ -310,6 +320,7 @@ def main() -> None:
         "blink_left": blink_lefts[valid_indices],
         "blink_right": blink_rights[valid_indices],
         "timestep_id": valid_indices.astype(np.int64),
+        "bbox_stale": bbox_stale[valid_indices],
     }
 
     save_npz_atomic(final_npz, **save_dict)

@@ -61,7 +61,7 @@ vid2smplx run examples/clip_talking.mp4 --final-incam
 
 Result: `output/clip_talking/smplx_params.npz` + `render/final_incam.mp4`.
 
-Needs Linux, conda or uv, ~23 GB disk, and an NVIDIA GPU: **8 GB** is enough for short clips, **~16 GB** for video over ~7 minutes. Peak VRAM adapts to the card (measured 5.1 GB on an 8 GB card, 12.3 GB on a 46 GB one, same clip) — see [benchmarks](docs/benchmarks.md). Blackwell GPUs: see [docs/install.md](docs/install.md#blackwell-gpus-rtx-50xx-rtx-pro-sm_120).
+Needs Linux, conda or uv, ~23 GB disk, and an NVIDIA GPU: **8 GB** covers everything measured up to 12,526 frames (~8 min at 25 fps), **~16 GB** beyond that. Peak VRAM follows the card, not the clip (measured 5.1 GB on an 8 GB card, 12.3 GB on a 46 GB one, same clip) — see [benchmarks](docs/benchmarks.md). Blackwell GPUs: see [docs/install.md](docs/install.md#blackwell-gpus-rtx-50xx-rtx-pro-sm_120).
 
 ## Commands
 

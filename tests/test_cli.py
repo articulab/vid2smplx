@@ -488,54 +488,52 @@ def test_dir_lock_refuses_a_second_run(tmp_path):
         pass
 
 
-# ---- VRAM preflight: predict the OOM instead of earning it ----
+# ---- VRAM preflight: recommend a card, never pretend to predict a peak ----
 
-def test_vram_warning_matches_every_measured_outcome():
-    """The real cleps results must all come out right (docs/benchmarks.md).
+def test_vram_warning_is_quiet_on_every_card_length_pair_that_actually_ran():
+    """Every measured success in docs/benchmarks.md must come out silent.
 
-    The 20-min-on-rtx8000 case USED to OOM on a 38.10 GiB attention mask and is the reason
-    this preflight exists. GVHMR 8be5155 made that allocation go away, and the same video
-    then completed on the same card at 13,710 MiB — so the expectation flips to "no warning"
-    on a MEASURED run, not because the check was relaxed.
+    A preflight that warns on hardware the docs call supported teaches people to ignore it,
+    and across 158 corpus run logs there is not one OOM line to point at.
     """
     from vid2smplx.checks import vram_warning
-    assert vram_warning(12520, 45.4) == ""          # rtx8000, 12.5k frames -> ran, rc=0
-    assert vram_warning(35755, 80.0) == ""          # h100, 20-min video    -> ran
-    assert vram_warning(35755, 45.4) == ""          # rtx8000, 20-min video -> ran, rc=0
-    warn = vram_warning(35755, 8.0)                 # 8 GB card: 13.7 GB still does not fit
-    assert warn and "35,755" in warn and "8 GB" in warn
-    assert "15 GB" in warn and "cut the video" in warn   # says what to do instead
-    assert "approximate" in warn                    # peak follows the card, not just the length
+    assert vram_warning(38, 8.0) == ""              # documented smoke test, 8 GB card
+    assert vram_warning(369, 8.0) == ""             # where the 5.1 GB was measured
+    assert vram_warning(370, 8.0) == ""             # one frame more is not a different machine
+    assert vram_warning(12_520, 45.4) == ""         # rtx8000, 12.5k frames -> rc=0
+    assert vram_warning(35_755, 45.4) == ""         # rtx8000, 20-min video -> rc=0
+    assert vram_warning(35_755, 80.0) == ""         # h100, 20-min video    -> rc=0
 
 
-def test_vram_warning_does_not_scare_an_8gb_card_off_the_documented_smoke_test():
-    """README and docs/install.md call 8 GB supported; 5.1 GB was MEASURED on one at 369
-    frames. A flat 13.7 GB ceiling warned that same card away from the 38-frame example."""
-    from vid2smplx.checks import vram_warning
-    assert vram_warning(38, 8.0) == ""              # the documented smoke test
-    assert vram_warning(369, 8.0) == ""             # the clip the 5.1 GB was measured on
+def test_vram_warning_fires_only_past_the_measured_range_and_says_what_to_do():
+    """The one case docs do not cover: a long clip on a card below the ~16 GB recommendation."""
+    from vid2smplx.checks import vram_warning, LONG_VIDEO_VRAM_GB, MEASURED_TO_FRAMES
+    assert vram_warning(MEASURED_TO_FRAMES, 8.0) == "", "warned inside the measured range"
+    warn = vram_warning(MEASURED_TO_FRAMES + 1, 8.0)
+    assert warn, "a 20-min clip on an 8 GB card got no warning at all"
+    assert f"~{LONG_VIDEO_VRAM_GB} GB" in warn      # a real card size, and the documented one
+    assert "cut the video" in warn                  # what to do instead
+    assert "cannot predict" in warn                 # honest about why there is no number
+    # The recommended card clears it; so does anything bigger.
+    assert vram_warning(MEASURED_TO_FRAMES + 1, float(LONG_VIDEO_VRAM_GB)) == ""
+    assert vram_warning(200_000, 45.4) == ""
+
+
+def test_vram_recommendation_is_a_card_size_the_docs_state():
+    """README.md and docs/install.md quote these two numbers; they must come from here."""
+    from vid2smplx.checks import recommended_vram_gb, MIN_VRAM_GB, LONG_VIDEO_VRAM_GB
+    assert (MIN_VRAM_GB, LONG_VIDEO_VRAM_GB) == (8, 16)
+    assert recommended_vram_gb(369) == MIN_VRAM_GB
+    assert recommended_vram_gb(35_755) == LONG_VIDEO_VRAM_GB
+    for doc in ("README.md", "docs/install.md"):
+        text = (REPO / doc).read_text()
+        assert f"{MIN_VRAM_GB} GB" in text and f"{LONG_VIDEO_VRAM_GB} GB" in text, doc
 
 
 def test_vram_warning_is_silent_without_data():
     from vid2smplx.checks import vram_warning
     assert vram_warning(0, 45.4) == ""              # unknown frame count -> no guess
     assert vram_warning(35755, 0.0) == ""           # no GPU visible      -> no guess
-
-
-def test_vram_estimate_uses_only_measured_points():
-    """Every value the estimate returns inside the measured range must BE a measured peak
-    (docs/benchmarks.md), and it must still rise — slowly, not quadratically — beyond it."""
-    from vid2smplx.checks import gvhmr_vram_estimate_gb, VRAM_LADDER
-    assert gvhmr_vram_estimate_gb(38) == gvhmr_vram_estimate_gb(369) == 5.1
-    assert gvhmr_vram_estimate_gb(727) == gvhmr_vram_estimate_gb(12_526) == 9.7
-    assert gvhmr_vram_estimate_gb(12_527) == gvhmr_vram_estimate_gb(35_755) == 13.7
-    measured = {gb for _f, gb in VRAM_LADDER}
-    assert all(gvhmr_vram_estimate_gb(f) in measured for f in (1, 100, 5_000, 20_000))
-    # Monotone: a longer clip may never be estimated cheaper than a shorter one.
-    seq = [gvhmr_vram_estimate_gb(f) for f in (1, 369, 370, 12_526, 12_527, 35_755, 200_000)]
-    assert seq == sorted(seq)
-    far = gvhmr_vram_estimate_gb(200_000)           # 1.9 h of video, far past anything measured
-    assert 13.7 < far < 45.4, f"beyond the measured range the estimate went to {far:.1f} GB"
 
 
 # ---- --no-hands must mean no hands, not "whatever the last run left behind" ----
@@ -567,7 +565,7 @@ def _seed_finished_run(tmp_path, monkeypatch, *, with_hands=True):
     if with_hands:
         _write_pt(hamer_pt)
         cli.stamp_write(hamer_pt, {"video": vid_id, "downsample": 1, "batch_size": 48,
-                                   "detector": "mediapipe", "focal": "1000.0"})
+                                   "focal": "1000.0"})
 
     flame = d / "emica" / name / "flame_params.npz"
     np.savez(flame, x=np.zeros(3)); cli.stamp_write(flame, {"video": vid_id})

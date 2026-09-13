@@ -31,13 +31,38 @@ ENV_ONLY=0
 FORCE=0
 USE_UV=0
 
+usage() {
+    cat <<'USAGE'
+Usage: bash install.sh [options]
+
+Creates one environment with every dependency (GVHMR, HaMeR, EMICA/Inferno, L2CS,
+MediaPipe), initialises the git submodules, downloads the auto-downloadable weights,
+and finishes by running `vid2smplx doctor`.
+
+Options:
+  --uv            use `uv venv .venv` in the repo instead of a conda env
+  --skip-models   create the env but download no weights (run `vid2smplx download` later)
+  --env-only      create the env and install packages only: no submodules, no weights
+  --force         delete an existing conda env of this name and recreate it
+  -h, --help      show this message
+
+Environment variables:
+  CONDA_ENV       conda env name (default: vid2smplx); ignored with --uv
+  UV_HTTP_TIMEOUT seconds before a uv download times out (default: 600)
+
+Needs ~23 GB of disk. SMPL-X and MANO are licence-gated and cannot be downloaded here;
+doctor prints the two links. See docs/install.md.
+USAGE
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --skip-models) SKIP_MODELS=1; shift ;;
         --env-only)    ENV_ONLY=1; shift ;;
         --force)       FORCE=1; shift ;;
         --uv)          USE_UV=1; shift ;;
-        *) echo "Unknown option: $1"; exit 1 ;;
+        -h|--help)     usage; exit 0 ;;
+        *) echo "Unknown option: $1"; echo; usage; exit 1 ;;
     esac
 done
 

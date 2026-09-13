@@ -197,7 +197,7 @@ summary is this table.
 | video length | `--constraint` | basis |
 |---|---|---|
 | up to ~12k frames (7 min) | `rtx8000\|a100` | MEASURED, rc=0 |
-| ~35k frames (20 min) | `rtx8000\|a100\|h100\|h200` (~16 GB is enough) | MEASURED on rtx8000: 13,710 MiB, 1 h 18 m, rc=0 |
+| ~35k frames (20 min) | `rtx8000\|a100\|h100\|h200` (~16 GB is enough) | UPPER BOUND on rtx8000: 13,710 MiB, 1 h 18 m, rc=0 — **pre-`ea4ba35`, never re-measured** |
 
 **Prefer `rtx8000`.** It allocates in minutes; h100 is a multi-day queue (median 34 min but
 p90 36 h, over 11,706 gpu-partition jobs). Since the fix there is no reason to wait for an

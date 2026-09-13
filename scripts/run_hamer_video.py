@@ -54,7 +54,6 @@ def main() -> None:
     # Legacy args (ignored, kept for backward compat with process_video.py)
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--gvhmr-bboxes", type=str, default="")
-    parser.add_argument("--hand-detector", type=str, default="vitpose")
 
     args = parser.parse_args()
 

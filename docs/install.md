@@ -6,11 +6,12 @@
 ## Requirements
 
 - Linux (tested on Ubuntu 20.04 / 22.04)
-- NVIDIA GPU. **8 GB minimum**, enough for clips up to a few thousand frames; **~16 GB** for
-  video beyond ~7 min (~12k frames). The stages size their batches from free VRAM, so the peak
-  follows the card: measured 5.1 GB on an 8 GB RTX PRO 1000 and 12.3 GB on a 46 GB RTX 8000 for
-  the same 369-frame clip. Tested on RTX PRO 1000 8 GB, RTX 8000, A100, H100. See
-  [benchmarks.md](benchmarks.md).
+- NVIDIA GPU. **8 GB minimum**, which covers everything we have measured up to **12,526 frames**
+  (~8 min at 25 fps); **~16 GB** beyond that. The stages size their batches from free VRAM, so the
+  peak follows the **card**, not the clip: the same 369-frame clip measured 5.1 GB on an 8 GB
+  RTX PRO 1000 and 12.3 GB on a 46 GB RTX 8000. Frame count therefore cannot predict your peak,
+  and `vid2smplx run` only warns when a clip runs past 12,526 frames on a card under ~16 GB.
+  Tested on RTX PRO 1000 8 GB, RTX 8000, A100, H100. See [benchmarks.md](benchmarks.md).
 - git, and either conda or [uv](https://docs.astral.sh/uv/). **ffmpeg/ffprobe are not a
   prerequisite**: `install.sh` vendors static builds of both into the env when they are not
   already on PATH (the cluster case — no root, no module).

@@ -358,17 +358,24 @@ def merge(gvhmr_path: Path | str, hamer_params_dir: Path | str | None, output_pa
     # Merge gaze + blink
     if gaze_blink_result:
         gb = np.load(gaze_blink_result, allow_pickle=True)
+        # Same rule as FLAME above: gaze from a carried-forward crop is not evidence.
+        gaze_stale = (gb["bbox_stale"] if "bbox_stale" in gb.files
+                      else np.zeros(len(gb["timestep_id"]), bool))
         gb_count = 0
+        gaze_stale_count = 0
         for i, t in enumerate(gb["timestep_id"]):
             t = int(t)
             if 0 <= t < num_frames:
                 result["gaze_pitch"][t] = gb["gaze_pitch"][i]
                 result["gaze_yaw"][t] = gb["gaze_yaw"][i]
-                result["gaze_valid"][t] = True
+                result["gaze_valid"][t] = not bool(gaze_stale[i])
                 result["blink_left"][t] = gb["blink_left"][i]
                 result["blink_right"][t] = gb["blink_right"][i]
-                gb_count += 1
-        print(f"  Gaze+Blink: {gb_count}/{num_frames} frames")
+                gb_count += int(result["gaze_valid"][t])
+                gaze_stale_count += int(gaze_stale[i])
+        print(f"  Gaze+Blink: {gb_count}/{num_frames} frames"
+              + (f" (+{gaze_stale_count} on a stale bbox, not counted valid)"
+                 if gaze_stale_count else ""))
 
     if "K_fullimg" in gvhmr_data:
         result["K_fullimg"] = gvhmr_data["K_fullimg"]

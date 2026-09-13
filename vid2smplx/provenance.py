@@ -2,8 +2,9 @@
 
 Why this exists
 ---------------
-The functional golden (``tests/functional/golden/smplx_params.npz``) is compared against a
-fresh run with tight tolerances (~2e-2 rad). Measured on this repo:
+The functional goldens (``tests/functional/golden/clip_talking_1.5s.npz``, 38 frames, the
+default; and ``tests/functional/golden/clip_dancing_20s.npz``, 598 frames, opt-in) are compared
+against a fresh run with tight tolerances (~2e-2 rad). Measured on this repo:
 
 * two runs on the SAME machine agree to 4.5e-7 rad on ``body_pose`` and are bit-identical
   on every other key — the pipeline is deterministic once seeded;

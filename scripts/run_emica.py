@@ -25,6 +25,7 @@ from utils import (
     get_video_fps, crop_face, expand_bbox, rot6d_to_axis_angle,
     auto_emica_batch_size, smooth_face_params,
     LEFT_IRIS_FLAME, RIGHT_IRIS_FLAME, LEFT_IRIS_MP, RIGHT_IRIS_MP, save_npz_atomic,
+    save_detection_cache,
 )
 
 
@@ -376,8 +377,7 @@ def main() -> None:
     # Save detection cache for gaze_blink reuse
     detection_cache = out_dir / "_detection_cache.npz"
     if not detection_cache.exists():
-        save_npz_atomic(detection_cache, bboxes=bboxes,
-                        valid_indices=np.array(valid_indices))
+        save_detection_cache(detection_cache, bboxes, valid_indices, stale)
 
     # Step 2: EMICA inference (reads chunks from disk, never holds all crops in RAM)
     print(f"\n  [Step 2] EMICA inference...")

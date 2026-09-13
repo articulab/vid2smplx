@@ -1054,7 +1054,7 @@ def _run_stages(args, output_dir: Path, timer: Timer) -> None:
     print(f"Name:       {video_name}")
     print(f"Output:     {output_dir}")
     if not args.no_hands:
-        print(f"Hand:       HaMeR (detector: {args.hand_detector})")
+        print("Hand:       HaMeR")
     else:
         print("Hand:       DISABLED")
     if args.face_method:
@@ -1066,7 +1066,7 @@ def _run_stages(args, output_dir: Path, timer: Timer) -> None:
         print("Render:     final incam only")
     print()
 
-    # Predict the GVHMR OOM before spending an hour earning it.
+    # Say up front when the clip runs past what this card size has been measured on.
     from .checks import vram_warning
     warning = vram_warning(frame_count(str(video)), gpu_total_gb())
     if warning:
@@ -1149,12 +1149,13 @@ def _run_stages(args, output_dir: Path, timer: Timer) -> None:
         print("==== Step 2/5: Hand estimation (SKIPPED) ====")
         print()
     else:
-        print(f"==== Step 2/5: Hand estimation (HaMeR + {args.hand_detector}) ====")
+        print("==== Step 2/5: Hand estimation (HaMeR) ====")
         timer.start("hamer")
 
+        # --hand-detector is deprecated and ignored (run_hamer_video.py parses and never reads
+        # it), so it must NOT sit in the key: passing it would discard hours of HaMeR work.
         hamer_key = {"video": stage_video_id, "downsample": args.downsample,
-                     "batch_size": args.batch_size, "detector": args.hand_detector,
-                     "focal": gvhmr_focal}
+                     "batch_size": args.batch_size, "focal": gvhmr_focal}
         if reuse_or_clear(hamer_params_pt, hamer_key, "HaMeR", extra_clear=[hamer_video_out]):
             hamer_params = hamer_params_pt
             print(f"  [SKIP] Already exists: {hamer_params}")
@@ -1166,7 +1167,6 @@ def _run_stages(args, output_dir: Path, timer: Timer) -> None:
                 "--downsample", str(args.downsample),
                 "--batch-size", str(args.batch_size),
                 "--focal-length", gvhmr_focal,
-                "--hand-detector", args.hand_detector,
                 "--no-render",
             ]
             gvhmr_bbx = gvhmr_out / video_name / "preprocess" / "bbx.pt"
@@ -1191,7 +1191,9 @@ def _run_stages(args, output_dir: Path, timer: Timer) -> None:
             hamer_params = None
             print("  [WARN] HaMeR finished but saved no hand params: no hands were detected in "
                   "this clip. Continuing without hands — the SMPL-X output will have flat hands. "
-                  "If you expected hands, check the render and try --hand-detector mediapipe.")
+                  "If you expected hands, render the body to see what HaMeR was given "
+                  "(`vid2smplx render <output dir> --layers final`): hands that are out of frame, "
+                  "motion-blurred or smaller than ~40 px are the usual cause.")
 
         if not production and not args.final_incam:
             hands_incam = render_out / "hands_incam.mp4"

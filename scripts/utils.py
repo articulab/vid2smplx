@@ -88,6 +88,30 @@ MAX_RESOLUTION = 1920
 # Rotation conversions (numpy)
 # ---------------------------------------------------------------------------
 
+def save_detection_cache(path: str | Path, bboxes, valid_indices, stale) -> Path:
+    """Write the face-detection cache EMICA hands to gaze/blink.
+
+    `stale[i]` says box i was carried forward from a nearby frame, not detected on its own.
+    It travels WITH the boxes because the consumer crops from them: a stale box may frame no
+    face at all, and gaze computed from such a crop must ship marked, never silently.
+    """
+    return save_npz_atomic(path, bboxes=np.asarray(bboxes),
+                           valid_indices=np.asarray(valid_indices),
+                           stale=np.asarray(stale, dtype=bool))
+
+
+def load_detection_cache(path: str | Path) -> tuple[dict[int, np.ndarray], set[int]]:
+    """(frame index -> bbox, and the set of frame indices whose bbox was carried forward).
+
+    Caches written before `stale` existed are read as all-fresh, which is what they asserted.
+    """
+    cache = np.load(str(path), allow_pickle=True)
+    idx = cache["valid_indices"]
+    stale = cache["stale"] if "stale" in cache.files else np.zeros(len(idx), bool)
+    boxes = {int(t): cache["bboxes"][i] for i, t in enumerate(idx)}
+    return boxes, {int(t) for i, t in enumerate(idx) if bool(stale[i])}
+
+
 def rotmat_to_axis_angle(rotmat: np.ndarray) -> np.ndarray:
     """Convert rotation matrix (3,3) to axis-angle (3,) via Rodrigues' formula."""
     rotmat = np.asarray(rotmat, dtype=np.float64)
