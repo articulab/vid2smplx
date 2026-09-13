@@ -19,13 +19,12 @@ Clip length enters only through GVHMR's HMR4D pass, and since banded attention (
 is flat: 9.7 GB at 727, 3,587 and 12,526 frames (rtx8000, `ea4ba35`, `--no-hands --no-face`; walls
 86 s / 334 s / 1,130 s, all rc=0).
 
-```mermaid
-xychart-beta
-    title "GVHMR peak VRAM vs clip length (rtx8000)"
-    x-axis ["727", "3587", "12526"]
-    y-axis "GB" 0 --> 16
-    line [9.7, 9.7, 9.7]
-```
+| frames | 727 | 3,587 | 12,526 |
+|---|---|---|---|
+| GVHMR peak | 9.7 GB | 9.7 GB | 9.7 GB |
+
+Flat: peak does not grow with clip length. Batches size from *free* VRAM, so the peak tracks the
+card, not the video — the same 369-frame clip peaks at 5.1 GB on an 8 GB card and 12.3 GB on a 46 GB one.
 
 The 35,755-frame (20 min) point is **pre-`ea4ba35` and has never been re-measured**: 13,710 MiB,
 1 h 18 m, rc=0 on a 46 GB card. It is an **upper bound**, not a measurement of what a small card
@@ -45,13 +44,9 @@ the card, so that number would be fiction.
 
 ## Stage timings
 
-```mermaid
-xychart-beta
-    title "Wall time per stage, 369-frame clip, Quadro RTX 8000"
-    x-axis ["GVHMR", "HaMeR", "EMICA", "gaze", "IK", "render"]
-    y-axis "seconds" 0 --> 120
-    bar [65.3, 105.3, 39.4, 18.1, 12.6, 1.6]
-```
+![Wall time per stage](img/stage_times.png)
+
+HaMeR is 43% of the run and the obvious target for any speedup work.
 
 MEASURED 2026-09-13, gpu006, GVHMR `ea4ba35`, ViTPose fp16 OFF (the default):
 
