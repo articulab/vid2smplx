@@ -325,6 +325,10 @@ def merge(gvhmr_path: Path | str, hamer_params_dir: Path | str | None, output_pa
         flame_jaw = flame["jaw_pose"]
         flame_eyes = flame["eyes_pose"]
         timestep_ids = flame["timestep_id"]
+        # Frames whose crop came from a carried-forward bbox carry EMICA's output for a face
+        # nobody detected; keep the params, but they are not evidence.
+        flame_stale = (flame["bbox_stale"] if "bbox_stale" in flame.files
+                       else np.zeros(len(timestep_ids), bool))
         if flame_jaw.ndim == 0:
             flame_jaw = np.stack([j.flatten() for j in flame_jaw.item()])
         if flame_expr.ndim == 0:
@@ -333,6 +337,7 @@ def merge(gvhmr_path: Path | str, hamer_params_dir: Path | str | None, output_pa
             flame_eyes = np.stack([e.flatten() for e in flame_eyes.item()])
 
         face_count = 0
+        stale_count = 0
         for i, t in enumerate(timestep_ids):
             t = int(t)
             if 0 <= t < num_frames:
@@ -343,10 +348,12 @@ def merge(gvhmr_path: Path | str, hamer_params_dir: Path | str | None, output_pa
                 if len(eyes_i) >= 6:
                     result["leye_pose"][t] = eyes_i[:3]
                     result["reye_pose"][t] = eyes_i[3:6]
-                result["face_valid"][t] = True
-                face_count += 1
+                result["face_valid"][t] = not bool(flame_stale[i])
+                face_count += int(result["face_valid"][t])
+                stale_count += int(flame_stale[i])
 
-        print(f"  FLAME: {face_count}/{num_frames} frames with face data")
+        print(f"  FLAME: {face_count}/{num_frames} frames with face data"
+              + (f" (+{stale_count} on a stale bbox, not counted valid)" if stale_count else ""))
 
     # Merge gaze + blink
     if gaze_blink_result:

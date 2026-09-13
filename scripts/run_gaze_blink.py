@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from pathlib import Path
 
@@ -184,8 +185,7 @@ def main() -> None:
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
-        print(f"  [ERROR] Cannot open video: {video_path}")
-        return
+        sys.exit(f"  [ERROR] Cannot open video: {video_path} — unreadable or not a video file.")
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     print(f"  Total frames: {total_frames}")

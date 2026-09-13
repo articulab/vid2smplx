@@ -96,8 +96,8 @@ def main() -> None:
             img_folder=str(frames_dir),
         )
         if not success:
-            print("HaMeR inference failed!")
-            return
+            sys.exit("  [ERROR] HaMeR inference failed — its own error is above. Exiting non-zero "
+                     "so the caller does not mistake a crash for 'no hands in this clip'.")
 
         import shutil
         shutil.rmtree(frames_dir)
@@ -111,8 +111,8 @@ def main() -> None:
             video=str(video_path),
         )
         if not success:
-            print("HaMeR inference failed!")
-            return
+            sys.exit("  [ERROR] HaMeR inference failed — its own error is above. Exiting non-zero "
+                     "so the caller does not mistake a crash for 'no hands in this clip'.")
 
     print(f"\n=== Done ===")
     print(f"Output: {render_dir}")

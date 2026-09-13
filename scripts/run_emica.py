@@ -32,13 +32,18 @@ from utils import (
 # Face detection + crop (single video pass, streaming)
 # ---------------------------------------------------------------------------
 
-def detect_and_crop_streaming(video_path: Path | str, crop_size: int = 224, scale: float = 1.3) -> tuple[list[str], int, np.ndarray, list[int]]:
+# How many consecutive frames may reuse the last detected box before the crop stops being
+# evidence of a face. Unbounded, ONE detection at frame 0 marked a whole video face_valid.
+MAX_BBOX_CARRY_FORWARD = 5
+
+
+def detect_and_crop_streaming(video_path: Path | str, crop_size: int = 224, scale: float = 1.3) -> tuple[list[str], int, np.ndarray, list[int], list[bool]]:
     """Single video pass: MediaPipe face detect + crop, one frame at a time.
 
     Returns:
-        images: (N, 3, crop_size, crop_size) float32 tensor
-        bboxes: (N, 4) float32 array [x1, y1, x2, y2] (expanded)
-        valid_indices: list of frame indices with detections
+        chunk_paths, n_detected, bboxes (N, 4), valid_indices, stale
+        `stale[i]` is True when that crop came from a carried-forward box rather than a
+        detection: EMICA still gets a crop, but the frame must not count as a valid face.
     """
     import mediapipe as mp
 
@@ -54,7 +59,9 @@ def detect_and_crop_streaming(video_path: Path | str, crop_size: int = 224, scal
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     bboxes = []
     valid_indices = []
+    stale = []
     last_bbox = None
+    carried = 0
 
     # Accumulate crops in a fixed-size buffer, flush to disk periodically.
     # This keeps RAM usage at ~buffer_size * 3 * 224 * 224 * 4 bytes.
@@ -86,8 +93,12 @@ def detect_and_crop_streaming(video_path: Path | str, crop_size: int = 224, scal
                     (bb.xmin + bb.width) * w, (bb.ymin + bb.height) * h]
             bbox = expand_bbox(bbox, scale)
             last_bbox = bbox
-        elif last_bbox is not None:
+            carried = 0
+        elif last_bbox is not None and carried < MAX_BBOX_CARRY_FORWARD:
             bbox = last_bbox
+            carried += 1
+        else:
+            last_bbox = None          # too old to stand in for a detection
 
         if bbox is None:
             continue
@@ -96,6 +107,7 @@ def detect_and_crop_streaming(video_path: Path | str, crop_size: int = 224, scal
         buffer.append(cropped)
         bboxes.append(bbox)
         valid_indices.append(idx)
+        stale.append(carried > 0)
         n_detected += 1
 
         if len(buffer) >= BUFFER_SIZE:
@@ -115,7 +127,7 @@ def detect_and_crop_streaming(video_path: Path | str, crop_size: int = 224, scal
     face_detection.close()
 
     bboxes_np = np.array(bboxes, dtype=np.float32) if bboxes else np.zeros((0, 4), dtype=np.float32)
-    return chunk_paths, n_detected, bboxes_np, valid_indices
+    return chunk_paths, n_detected, bboxes_np, valid_indices, stale
 
 
 # ---------------------------------------------------------------------------
@@ -350,10 +362,12 @@ def main() -> None:
 
     # Step 1: Detect faces + crop (streaming, chunked to disk)
     print(f"\n  [Step 1] MediaPipe face detection + crop (streaming)...")
-    chunk_paths, n_detected, bboxes, valid_indices = detect_and_crop_streaming(
+    chunk_paths, n_detected, bboxes, valid_indices, stale = detect_and_crop_streaming(
         video_path, scale=args.bbox_scale,
     )
-    print(f"  Detected faces in {len(valid_indices)} frames ({len(chunk_paths)} chunks)")
+    n_stale = sum(stale)
+    print(f"  Detected faces in {len(valid_indices) - n_stale} frames "
+          f"(+{n_stale} carried forward from a nearby detection, {len(chunk_paths)} chunks)")
 
     if n_detected == 0:
         print("  [ERROR] No faces detected in any frame!")
@@ -405,6 +419,7 @@ def main() -> None:
         "verts": verts.astype(np.float32),
         "face_bbox": bboxes.astype(np.float32),
         "timestep_id": np.array(valid_indices, dtype=np.int64),
+        "bbox_stale": np.array(stale, dtype=bool),
         "faces": faces.astype(np.int64),
     }
     save_npz_atomic(final_npz, **save_dict)

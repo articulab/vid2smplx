@@ -174,6 +174,43 @@ def test_stamp_reuses_only_the_same_input_and_flags(tmp_path):
     assert ok is False and "static_cam" in why
 
 
+def test_stamp_invalidates_when_the_code_changes(tmp_path, monkeypatch):
+    """A `git pull` that changes code or bumps a submodule must not be answered with [SKIP].
+
+    Before this, stamp keys held inputs and flags only, so a re-run into an existing
+    --output-dir printed "[SKIP] Already exists" and wrote SUCCESS over output from the
+    old code.
+    """
+    from vid2smplx import cli, provenance
+    art = tmp_path / "out.pt"; art.write_text("result")
+    key = {"video": {"name": "a.mp4", "size": 1, "mtime_ns": 2}}
+
+    monkeypatch.setattr(provenance, "code_identity",
+                        lambda repo=None: (("git_commit", "aaaa"), ("git_dirty", False)))
+    cli.stamp_write(art, key)
+    assert cli.stamp_ok(art, key)[0] is True
+
+    monkeypatch.setattr(provenance, "code_identity",       # submodule pin bumped by the pull
+                        lambda repo=None: (("git_commit", "aaaa"), ("git_dirty", False),
+                                           ("git_submodules", "beef GVHMR")))
+    ok, why = cli.stamp_ok(art, key)
+    assert ok is False and "checkout changed" in why
+
+    monkeypatch.setattr(provenance, "code_identity",       # repo HEAD moved
+                        lambda repo=None: (("git_commit", "bbbb"), ("git_dirty", False)))
+    assert cli.stamp_ok(art, key)[0] is False
+
+
+def test_stamped_key_records_the_code_identity(tmp_path):
+    """Not just "it re-runs": the stamp on disk must actually carry the code fields."""
+    import json
+    from vid2smplx.cli import stamp_path, stamp_write
+    art = tmp_path / "out.pt"; art.write_text("result")
+    stamp_write(art, {"video": None})
+    code = json.loads(stamp_path(art).read_text())["key"]["code"]
+    assert set(code) == {"git_commit", "git_dirty", "git_submodules"}
+
+
 def test_stale_artifact_is_deleted_not_reused(tmp_path):
     """reuse_or_clear must remove the stale artifact: a half-old output dir is worse than none."""
     from vid2smplx.cli import reuse_or_clear, stamp_path, stamp_write
@@ -467,7 +504,16 @@ def test_vram_warning_matches_every_measured_outcome():
     assert vram_warning(35755, 45.4) == ""          # rtx8000, 20-min video -> ran, rc=0
     warn = vram_warning(35755, 8.0)                 # 8 GB card: 13.7 GB still does not fit
     assert warn and "35,755" in warn and "8 GB" in warn
-    assert "16 GB" in warn and "cut the video" in warn   # says what to do instead
+    assert "15 GB" in warn and "cut the video" in warn   # says what to do instead
+    assert "approximate" in warn                    # peak follows the card, not just the length
+
+
+def test_vram_warning_does_not_scare_an_8gb_card_off_the_documented_smoke_test():
+    """README and docs/install.md call 8 GB supported; 5.1 GB was MEASURED on one at 369
+    frames. A flat 13.7 GB ceiling warned that same card away from the 38-frame example."""
+    from vid2smplx.checks import vram_warning
+    assert vram_warning(38, 8.0) == ""              # the documented smoke test
+    assert vram_warning(369, 8.0) == ""             # the clip the 5.1 GB was measured on
 
 
 def test_vram_warning_is_silent_without_data():
@@ -476,11 +522,18 @@ def test_vram_warning_is_silent_without_data():
     assert vram_warning(35755, 0.0) == ""           # no GPU visible      -> no guess
 
 
-def test_vram_estimate_is_flat_across_the_whole_measured_range():
-    """13.7 GB is measured at 721, 12,520 AND 35,755 frames — the estimate must not invent
-    growth inside that range, and must still rise (slowly, not quadratically) beyond it."""
-    from vid2smplx.checks import gvhmr_vram_estimate_gb
-    assert gvhmr_vram_estimate_gb(721) == gvhmr_vram_estimate_gb(35755) == 13.7
+def test_vram_estimate_uses_only_measured_points():
+    """Every value the estimate returns inside the measured range must BE a measured peak
+    (docs/benchmarks.md), and it must still rise — slowly, not quadratically — beyond it."""
+    from vid2smplx.checks import gvhmr_vram_estimate_gb, VRAM_LADDER
+    assert gvhmr_vram_estimate_gb(38) == gvhmr_vram_estimate_gb(369) == 5.1
+    assert gvhmr_vram_estimate_gb(727) == gvhmr_vram_estimate_gb(12_526) == 9.7
+    assert gvhmr_vram_estimate_gb(12_527) == gvhmr_vram_estimate_gb(35_755) == 13.7
+    measured = {gb for _f, gb in VRAM_LADDER}
+    assert all(gvhmr_vram_estimate_gb(f) in measured for f in (1, 100, 5_000, 20_000))
+    # Monotone: a longer clip may never be estimated cheaper than a shorter one.
+    seq = [gvhmr_vram_estimate_gb(f) for f in (1, 369, 370, 12_526, 12_527, 35_755, 200_000)]
+    assert seq == sorted(seq)
     far = gvhmr_vram_estimate_gb(200_000)           # 1.9 h of video, far past anything measured
     assert 13.7 < far < 45.4, f"beyond the measured range the estimate went to {far:.1f} GB"
 

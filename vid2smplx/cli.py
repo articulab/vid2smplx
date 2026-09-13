@@ -358,6 +358,16 @@ def stamp_path(target: Path) -> Path:
     return target.with_name(target.name + ".stamp.json")
 
 
+def full_key(key: dict) -> dict:
+    """A stage key plus the identity of the code that would produce it.
+
+    Applied here rather than at each call site so no stage can forget it: a stamp that
+    describes only inputs and flags reuses output from BEFORE a `git pull`.
+    """
+    from .provenance import code_identity
+    return {**key, "code": dict(code_identity(str(REPO_DIR)))}
+
+
 def stamp_ok(target: Path, key: dict) -> tuple[bool, str]:
     """(reuse?, why not). Reuse only what exists AND provably came from exactly `key`."""
     if not target.exists():
@@ -375,15 +385,20 @@ def stamp_ok(target: Path, key: dict) -> tuple[bool, str]:
     if not isinstance(doc, dict):
         return False, (f"stamp at {sp} is JSON but not an object (got {type(doc).__name__}) — "
                        f"hand-edited or truncated; delete it and re-run")
+    key = full_key(key)
     got = doc.get("key")
     if got != key:
         changed = sorted({k for k in set(got or {}) | set(key) if (got or {}).get(k) != key.get(k)})
+        if changed == ["code"]:
+            return False, ("the vid2smplx checkout changed since it was made (a `git pull`, a "
+                           "submodule bump, or local edits) — rerunning so the output matches the code")
         return False, f"input or flags changed since it was made ({', '.join(changed) or 'differs'})"
     return True, ""
 
 
 def stamp_write(target: Path, key: dict) -> None:
-    stamp_path(target).write_text(json.dumps({"key": key, "written": time.time()}, indent=2, sort_keys=True))
+    stamp_path(target).write_text(
+        json.dumps({"key": full_key(key), "written": time.time()}, indent=2, sort_keys=True))
 
 
 def artifact_intact(target: Path) -> tuple[str, str]:
@@ -1167,10 +1182,16 @@ def _run_stages(args, output_dir: Path, timer: Timer) -> None:
             hamer_params = hamer_params_pt if hamer_params_pt.exists() else hamer_params_legacy
             if hamer_params_pt.exists():
                 stamp_write(hamer_params_pt, hamer_key)
-            elif not dir_has_files(hamer_params_legacy):
-                print("  [WARN] No hand params saved (no hands detected?)")
 
-        print(f"  [OK] Hand params: {hamer_params}")
+        # A crash is the caller's problem (conda_run raises on rc != 0); reaching here means
+        # HaMeR finished. [OK] must therefore never name a file that is not on disk.
+        if hands_present():
+            print(f"  [OK] Hand params: {hamer_params}")
+        else:
+            hamer_params = None
+            print("  [WARN] HaMeR finished but saved no hand params: no hands were detected in "
+                  "this clip. Continuing without hands — the SMPL-X output will have flat hands. "
+                  "If you expected hands, check the render and try --hand-detector mediapipe.")
 
         if not production and not args.final_incam:
             hands_incam = render_out / "hands_incam.mp4"
@@ -1267,7 +1288,11 @@ def _run_stages(args, output_dir: Path, timer: Timer) -> None:
             if gaze_blink_result.exists():
                 stamp_write(gaze_blink_result, gaze_key)
 
-        print(f"  [OK] Gaze+Blink: {gaze_blink_result}")
+        if gaze_blink_result.exists():
+            print(f"  [OK] Gaze+Blink: {gaze_blink_result}")
+        else:
+            print("  [WARN] Gaze+Blink finished but produced no output; continuing without it.")
+            gaze_blink_result = None
         timer.end("gaze")
         print()
     else:

@@ -14,25 +14,30 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 
-# (group, relative path, how to get it, min bytes). "auto" = scripts/download_models.sh fetches it.
+# (group, relative path, how to get it, min bytes). `how` is printed verbatim next to a
+# [MISS] row, so it must name a command the reader can actually run -- DOWNLOADABLE is the
+# fetched-by-`vid2smplx download` case; the hand-registration ones spell out the site.
 # min_bytes catches truncated downloads that exists() passes and torch.load dies on;
 # each is a safe floor (~90% of the real artifact), never an exact size.
+DOWNLOADABLE = "run `vid2smplx download` (scripts/download_models.sh fetches this)"
+
 MODELS = [
-    ("GVHMR", "GVHMR/inputs/checkpoints/gvhmr/gvhmr_siga24_release.ckpt", "auto", 140_000_000),
-    ("GVHMR", "GVHMR/inputs/checkpoints/hmr2/epoch=10-step=25000.ckpt", "auto", 2_400_000_000),
-    ("GVHMR", "GVHMR/inputs/checkpoints/vitpose/vitpose-h-multi-coco.pth", "auto", 2_200_000_000),
-    ("GVHMR", "GVHMR/inputs/checkpoints/yolo/yolov8x.pt", "auto", 120_000_000),
-    ("GVHMR", "GVHMR/inputs/checkpoints/dpvo/dpvo.pth", "auto", 12_000_000),
-    ("HaMeR", "hamer/_DATA/hamer_ckpts/checkpoints/hamer.ckpt", "auto", 2_400_000_000),
-    ("HaMeR", "hamer/_DATA/data/mano_mean_params.npz", "auto", 1_000),
-    ("EMICA", "models/inferno/FaceReconstruction/models", "auto", 2_300_000_000),
-    ("EMICA", "models/inferno/mica/model/mica.tar", "auto", 450_000_000),
-    ("EMICA", "inferno/assets/FLAME/geometry/generic_model.pkl", "auto (EMOCA FLAME.zip)", 47_000_000),
+    ("GVHMR", "GVHMR/inputs/checkpoints/gvhmr/gvhmr_siga24_release.ckpt", DOWNLOADABLE, 140_000_000),
+    ("GVHMR", "GVHMR/inputs/checkpoints/hmr2/epoch=10-step=25000.ckpt", DOWNLOADABLE, 2_400_000_000),
+    ("GVHMR", "GVHMR/inputs/checkpoints/vitpose/vitpose-h-multi-coco.pth", DOWNLOADABLE, 2_200_000_000),
+    ("GVHMR", "GVHMR/inputs/checkpoints/yolo/yolov8x.pt", DOWNLOADABLE, 120_000_000),
+    ("GVHMR", "GVHMR/inputs/checkpoints/dpvo/dpvo.pth", DOWNLOADABLE, 12_000_000),
+    ("HaMeR", "hamer/_DATA/hamer_ckpts/checkpoints/hamer.ckpt", DOWNLOADABLE, 2_400_000_000),
+    ("HaMeR", "hamer/_DATA/data/mano_mean_params.npz", DOWNLOADABLE, 1_000),
+    ("EMICA", "models/inferno/FaceReconstruction/models", DOWNLOADABLE, 2_300_000_000),
+    ("EMICA", "models/inferno/mica/model/mica.tar", DOWNLOADABLE, 450_000_000),
+    ("EMICA", "inferno/assets/FLAME/geometry/generic_model.pkl",
+     DOWNLOADABLE + " -- it lives in EMOCA's FLAME.zip", 47_000_000),
     ("EMICA", "~/.insightface/models/antelopev2/scrfd_10g_bnkps.onnx",
-     "auto (inferno loads insightface from ~/.insightface)", 15_000_000),
-    ("Hands", "models/mediapipe/hand_landmarker.task", "auto", 7_000_000),
+     DOWNLOADABLE + " -- inferno loads insightface from ~/.insightface", 15_000_000),
+    ("Hands", "models/mediapipe/hand_landmarker.task", DOWNLOADABLE, 7_000_000),
     ("Gaze", "models/L2CSNet_gaze360.pkl",
-     "auto (HF mirror: ymachta/articumotion-checkpoints)", 85_000_000),
+     DOWNLOADABLE + " -- HF mirror ymachta/articumotion-checkpoints", 85_000_000),
     ("SMPL-X", "models/smplx/SMPLX_NEUTRAL.npz",
      "register at https://smpl-x.is.tue.mpg.de/ (SMPL-X v1.1 NPZ) -> unzip to models/smplx/", 95_000_000),
     # Ships inside the same SMPL-X v1.1 archive but is easy to miss when only the
@@ -58,28 +63,33 @@ LINKS = [
 # that is vram_warning's job below. README and docs/install.md must state this same number.
 MIN_VRAM_GB = 8
 
-# GVHMR's HMR4D pass USED to build a dense (L, L) attention mask, which made VRAM
-# quadratic in frames (a 38.10 GiB allocation at 35,755 frames). GVHMR 8be5155 carries
-# banded attention, so the window is never materialised and the quadratic term is gone.
-# Deliberately a CEILING, applied at every length, from the 13,710 MiB measured at 35,755 frames
-# on a 45 GB rtx8000 (docs/benchmarks.md). Real peaks under ea4ba35 are LOWER -- 9.7 GB flat from
-# 727 to 12,526 frames -- because batches size to free VRAM, so this over-estimates every length
-# measured so far. That is the safe direction: it only WARNS, and never refuses.
-GVHMR_BASE_GB = 13.7
+# Measured peak VRAM, in frames -> GB. Every number here is an OBSERVED peak from
+# docs/benchmarks.md -- nothing is interpolated or extrapolated, and the estimate below
+# only ever reads the first row whose frame count covers the clip.
+#   369    5.1  full pipeline, 8 GB RTX PRO 1000  (the same clip peaks 12.3 GB on a 46 GB card)
+#   12526  9.7  GVHMR only, 46 GB rtx8000, flat across 727 / 3,587 / 12,526
+#   35755 13.7  GVHMR only, 46 GB rtx8000, pre-ea4ba35 ceiling -- the largest figure we hold
+# Peak follows the CARD, not just the length: every stage sizes its batches from free VRAM
+# (auto_batch.py), so a big card spends more on the same clip. An estimate keyed on frames
+# alone is therefore approximate, and this ladder takes the SMALL-card figure where one
+# exists -- it is the one that decides whether an 8 GB card can do the job.
+VRAM_LADDER = ((369, 5.1), (12_526, 9.7), (35_755, 13.7))
+
+GVHMR_BASE_GB = VRAM_LADDER[-1][1]    # the ceiling, for lengths at or under the measured max
+GVHMR_MEASURED_TO_FRAMES = VRAM_LADDER[-1][0]
 
 # Banded attention peak, measured standalone on rtx8000 at the same shapes GVHMR uses
 # (8 heads x 64 dims, 2048-frame query blocks): 0.81 GiB at 16k frames, 3.78 GiB at 35,755.
-# It sits under the 13.7 GB the ViT stages already hold, so it does not move the peak;
-# kept as a term so the estimate still rises for sequences far beyond anything measured.
+# It sits under what the ViT stages already hold, so it does not move the peak; kept as a
+# term so the estimate still rises beyond anything measured.
 GVHMR_BAND_GB_PER_FRAME = 3.78 / 35755
-
-GVHMR_MEASURED_TO_FRAMES = 35755      # measured at 13.7 GB up to here
 
 
 def gvhmr_vram_estimate_gb(frames: int) -> float:
-    """Rough peak VRAM for GVHMR on `frames` frames, from the measured points."""
-    if frames <= GVHMR_MEASURED_TO_FRAMES:
-        return GVHMR_BASE_GB          # measured, not extrapolated
+    """Approximate peak VRAM on `frames` frames: the lowest measured point that covers it."""
+    for upto, gb in VRAM_LADDER:
+        if frames <= upto:
+            return gb
     return GVHMR_BASE_GB + GVHMR_BAND_GB_PER_FRAME * float(frames)
 
 
@@ -90,17 +100,20 @@ def vram_warning(frames: int, available_gb: float) -> str:
     need = gvhmr_vram_estimate_gb(frames)
     if need <= available_gb * 0.95:
         return ""
+    # Name a card that the ladder says actually covers this clip, rather than a fixed 16 GB.
     return (
-        f"This clip is {frames:,} frames and GVHMR needs an estimated {need:.0f} GB of VRAM, "
-        f"but this GPU has {available_gb:.0f} GB. GVHMR is the longest stage — on a 20-min "
+        f"This clip is {frames:,} frames and the pipeline needs an estimated {need:.1f} GB of "
+        f"VRAM, but this GPU has {available_gb:.0f} GB. GVHMR is the longest stage — on a 20-min "
         f"video it can run for over an hour before failing.\n"
         f"  Do one of these instead:\n"
-        f"    - run on a GPU with at least ~16 GB, or\n"
+        f"    - run on a GPU with at least ~{max(8, int(need) + 2)} GB, or\n"
         f"    - cut the video into pieces and process them separately.\n"
-        f"  GVHMR's memory is now roughly FLAT in clip length (measured 13.7 GB at both 12,520 "
-        f"and 35,755 frames, docs/benchmarks.md) — it used to be quadratic. This is an estimate; "
-        f"it is a warning, not a refusal."
+        f"  Memory is roughly FLAT in clip length (5.1 GB at 369 frames on an 8 GB card, 9.7 GB "
+        f"to 12,526 frames, 13.7 GB at 35,755 — docs/benchmarks.md); it used to be quadratic. "
+        f"Peak also follows the CARD, since batches size to free VRAM, so this figure is "
+        f"approximate. It is a warning, not a refusal."
     )
+
 
 IMPORTS = ["torch", "pytorch3d", "smplx", "hmr4d", "hamer", "inferno", "detectron2",
            "ultralytics", "insightface", "l2cs", "mediapipe", "pytorch_lightning"]
@@ -238,8 +251,9 @@ def doctor(repo: Path = REPO, env: str | None = None, check_env: bool = True, sk
         print(f"  {tag} {name}" + (f"\n         -> {note}" if note else ""))
     print()
     if bad:
-        print(f"  {len(bad)} item(s) missing or unusable. Fix the lines marked [MISS]/[CORRUPT] above, "
-              f"then rerun `vid2smplx doctor`.")
+        print(f"  {len(bad)} item(s) missing or unusable. Most are fetched by `vid2smplx download`; "
+              f"the rest need a manual registration and say so. Do what the `->` line under each "
+              f"[MISS]/[CORRUPT] row says, then rerun `vid2smplx doctor`.")
     else:
         print("  All checks passed. Try: vid2smplx run examples/clip_talking.mp4 --percent 10 --final-incam")
     return not bad

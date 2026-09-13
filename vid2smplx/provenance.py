@@ -21,6 +21,7 @@ without a GPU.
 """
 from __future__ import annotations
 
+import functools
 import json
 import platform
 import subprocess
@@ -72,6 +73,19 @@ def capture_environment(repo: Path | None = None) -> dict:
     except Exception:
         pass
     return env
+
+
+@functools.lru_cache(maxsize=4)
+def code_identity(repo: str | None = None) -> tuple[tuple[str, object], ...]:
+    """Which code produced an artifact: repo HEAD + every submodule pin, as a hashable pair list.
+
+    Stage stamps key on inputs and flags only, so after a `git pull` that changes code or bumps
+    a submodule, a re-run into an existing output dir reported [SKIP] and kept results from the
+    OLD code. `git_dirty` is a flag, not a hash: two different dirty trees at one commit look
+    the same, which is the price of not hashing the worktree on every run.
+    """
+    env = capture_environment(Path(repo) if repo else None)
+    return tuple((k, env[k]) for k in ("git_commit", "git_dirty", "git_submodules"))
 
 
 def golden_unusable(golden: dict | None) -> str:
