@@ -194,7 +194,11 @@ def matrix_to_axis_angle(matrix: torch.Tensor) -> torch.Tensor:
     quat[cond3, 2] = (m[cond3, 1, 2] + m[cond3, 2, 1]) / s3[cond3]
     quat[cond3, 3] = 0.25 * s3[cond3]
 
-    quat = quat * torch.sign(quat[:, :1])
+    # Canonicalise to w >= 0. NOT torch.sign: sign(0) == 0, which zeroes the whole
+    # quaternion at theta = pi (w = 0) and silently returns the identity -- a 180-degree
+    # rotation would be dropped rather than represented. Same failure the numpy
+    # rotmat_to_axis_angle near-pi branch exists to avoid.
+    quat = quat * torch.where(quat[:, :1] < 0, -1.0, 1.0)
     w = torch.clamp(quat[:, 0], -1.0, 1.0)
     angle = 2.0 * torch.acos(w)
     axis = quat[:, 1:]

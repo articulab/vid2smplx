@@ -189,3 +189,24 @@ def test_nan_loss_does_not_overwrite_an_existing_file(tmp_path):
         ik_hands.save_ik_npz(path, data)
     assert path.read_bytes() == before
     assert not list(tmp_path.glob("*.tmp*"))
+
+
+# --- the torch twin of the numpy near-pi bug -------------------------------------------------
+# matrix_to_axis_angle canonicalised with torch.sign(w). sign(0) == 0, so at theta = pi
+# (w = 0) the quaternion was zeroed and the function returned the identity: a 180-degree
+# rotation silently became no rotation. Reached on the default path from run_emica.py:201
+# via rot6d_to_axis_angle.
+@pytest.mark.parametrize("diag, axis", [
+    ((1.0, -1.0, -1.0), 0),
+    ((-1.0, 1.0, -1.0), 1),
+    ((-1.0, -1.0, 1.0), 2),
+])
+def test_matrix_to_axis_angle_represents_a_half_turn(diag, axis):
+    torch = pytest.importorskip("torch")
+    from utils import matrix_to_axis_angle
+    R = torch.tensor(np.diag(np.array(diag, dtype=np.float64))[None], dtype=torch.float32)
+    got = matrix_to_axis_angle(R)[0].numpy()
+    assert np.isfinite(got).all()
+    # a half turn has magnitude pi about the one axis whose diagonal entry stayed +1
+    assert abs(np.linalg.norm(got) - np.pi) < 1e-5, f"half turn collapsed to {got}"
+    assert abs(abs(got[axis]) - np.pi) < 1e-5, f"half turn on the wrong axis: {got}"
