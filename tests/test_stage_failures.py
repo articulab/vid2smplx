@@ -252,3 +252,14 @@ def test_gaze_without_bbox_stale_still_merges(tmp_path):
     out = mod.merge(_fake_gvhmr(tmp_path), None, tmp_path / "smplx.npz",
                     gaze_blink_result=_gaze_npz(tmp_path, [0, 1, 2]))
     assert list(out["gaze_valid"][:3]) == [True, True, True]
+
+
+def test_merge_without_gaze_still_writes_every_gaze_key(tmp_path):
+    """gaze is opt-in, but the key set is not: consumers and the goldens expect these names."""
+    mod = _load("merge_body_hands")
+    out = mod.merge(_fake_gvhmr(tmp_path), None, tmp_path / "smplx.npz",
+                    gaze_blink_result=None)
+    for k in ("gaze_pitch", "gaze_yaw", "blink_left", "blink_right", "gaze_valid"):
+        assert k in out, k
+    assert not out["gaze_valid"].any()
+    assert not out["blink_left"].any() and not out["blink_right"].any()

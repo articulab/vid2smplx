@@ -54,7 +54,7 @@ def test_disabled_stages_are_skipped_not_failed():
         qc = quality_report(p, {}, n_hand_det=None, hands=False, face=False)
         assert not qc["failures"], qc["failures"]
         assert not qc["warnings"], qc["warnings"]
-        assert qc["stages"] == {"hands": "SKIPPED", "face": "SKIPPED"}
+        assert qc["stages"] == {"hands": "SKIPPED", "face": "SKIPPED", "gaze": "SKIPPED"}
 
 
 def test_missing_ik_fails():
@@ -67,7 +67,8 @@ def test_missing_ik_fails():
 def test_skipped_stages_report_no_coverage_numbers():
     """--no-hands printed 'hands_left: 0.0' next to 'hands: SKIPPED' — it reads as a failure."""
     with tempfile.TemporaryDirectory() as t:
-        qc = quality_report(_params(t, ik=False), {}, n_hand_det=None, hands=False, face=True)
+        qc = quality_report(_params(t, ik=False), {}, n_hand_det=None, hands=False, face=True,
+                            gaze=True)
         assert "hands_left" not in qc and "hands_right" not in qc
         assert qc["face"] == 1.0 and qc["gaze"] == 1.0
         qc = quality_report(_params(t), {}, n_hand_det=5, hands=True, face=False)

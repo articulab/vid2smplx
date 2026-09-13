@@ -673,6 +673,11 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--full-debug", "--full_debug", action="store_true", help="render every debug video (body, hands, face, global)")
     r.add_argument("--no-hands", "--no_hands", action="store_true", help="skip HaMeR")
     r.add_argument("--no-face", "--no_face", action="store_true", help="skip EMICA, gaze and blink")
+    r.add_argument("--gaze", action="store_true",
+                   help="also estimate gaze and blink (OFF by default, and EXPERIMENTAL: the eye "
+                        "pose is an uncalibrated iris-offset proxy and blink validity tracks the "
+                        "face bbox, not landmark success -- see 'Known limitations' in README.md). "
+                        "Ignored with --no-face.")
     r.add_argument("--percent", type=_int_range(1, 100), default=100, help="process only the first N%% of the video (testing)")
     r.add_argument("--downsample", type=_int_range(1), default=1, help="run hands on every Nth frame")
     r.add_argument("--batch-size", "--batch_size", type=_int_range(1), default=48, help="HaMeR batch size")
@@ -787,6 +792,9 @@ def validate_run_args(args, argv: list[str], error) -> None:
         print("  [NOTE] --downsample has no effect with --no-hands.")
     if args.no_face:
         args.face_method = ""
+        if args.gaze:
+            print("  [NOTE] --gaze needs the face stage; --no-face wins, gaze and blink are off.")
+            args.gaze = False
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -819,7 +827,9 @@ def _main(argv: list[str] | None = None) -> None:
         from .checks import doctor
         skip = set()
         if args.no_face:
-            skip |= {"EMICA", "Gaze"}
+            skip |= {"EMICA"}
+        if not args.gaze:
+            skip |= {"Gaze"}          # opt-in stage: do not demand the L2CS weight nobody asked for
         if args.no_hands:
             skip |= {"HaMeR", "Hands", "MANO"}
         if not doctor(check_env=False, skip=skip):
@@ -854,7 +864,7 @@ def hamer_detection_count(hamer_pt: Path) -> tuple[int | None, str]:
 
 def quality_report(npz_path: Path, timings: dict, n_hand_det: int | None = None,
                    hands: bool = True, face: bool = True, hand_failure: str = "",
-                   multi_person: str = "") -> dict:
+                   multi_person: str = "", gaze: bool = False) -> dict:
     """Inspect the produced params and decide whether this clip is actually usable.
 
     Returns a dict written to summary.json; `failures` being non-empty means the
@@ -865,7 +875,8 @@ def quality_report(npz_path: Path, timings: dict, n_hand_det: int | None = None,
 
     qc: dict = {"timings_s": dict(timings), "warnings": [], "failures": [],
                 "stages": {"hands": "on" if hands else "SKIPPED",
-                           "face": "on" if face else "SKIPPED"}}
+                           "face": "on" if face else "SKIPPED",
+                           "gaze": "on" if gaze else "SKIPPED"}}
     if multi_person:
         qc["warnings"].append(multi_person)
 
@@ -887,7 +898,9 @@ def quality_report(npz_path: Path, timings: dict, n_hand_det: int | None = None,
     if hands:
         cov |= {"hands_left": "left_hand_valid", "hands_right": "right_hand_valid"}
     if face:
-        cov |= {"face": "face_valid", "gaze": "gaze_valid"}
+        cov |= {"face": "face_valid"}
+    if gaze:
+        cov |= {"gaze": "gaze_valid"}
     for label, key in cov.items():
         qc[label] = float(z[key].mean()) if key in z else 0.0
     if "ik_coverage" in z:
@@ -916,10 +929,9 @@ def quality_report(npz_path: Path, timings: dict, n_hand_det: int | None = None,
                 qc["warnings"].append(
                     f"{side} coverage {qc[side]:.1%} — hands mostly not visible, pose is "
                     f"fallback/interpolated; filter on {side.replace('hands_', '')}_hand_valid")
-    if face:
-        for label in ("face", "gaze"):
-            if qc[label] < MIN_COVERAGE[label]:
-                qc["warnings"].append(f"{label} coverage {qc[label]:.1%} is low")
+    for label in (["face"] if face else []) + (["gaze"] if gaze else []):
+        if qc[label] < MIN_COVERAGE[label]:
+            qc["warnings"].append(f"{label} coverage {qc[label]:.1%} is low")
 
     # IK absent entirely means the stage crashed (e.g. a missing model file) and the
     # arms are raw GVHMR — the hand-to-body alignment never happened. That is a
@@ -1265,8 +1277,8 @@ def _run_stages(args, output_dir: Path, timer: Timer) -> None:
     gaze_blink_out = output_dir / "gaze_blink"
     gaze_blink_result = gaze_blink_out / video_name / "gaze_blink.npz"
 
-    if args.face_method == "emica":
-        print("==== Step 3.5: Gaze + Blink estimation ====")
+    if args.gaze and args.face_method == "emica":
+        print("==== Step 3.5: Gaze + Blink estimation (EXPERIMENTAL, uncalibrated) ====")
         timer.start("gaze")
 
         gvhmr_video = gvhmr_out / video_name / "0_input_video.mp4"
@@ -1298,7 +1310,7 @@ def _run_stages(args, output_dir: Path, timer: Timer) -> None:
         timer.end("gaze")
         print()
     else:
-        print("==== Step 3.5: Gaze + Blink (SKIPPED) ====")
+        print("==== Step 3.5: Gaze + Blink (SKIPPED — opt in with --gaze) ====")
         gaze_blink_result = None
         print()
 
@@ -1412,7 +1424,7 @@ def _run_stages(args, output_dir: Path, timer: Timer) -> None:
     n_hand_det, hand_failure = ((None, "") if args.no_hands
                                 else hamer_detection_count(hamer_params_pt))
     qc = quality_report(smplx_out, timer.timings, n_hand_det=n_hand_det,
-                        hands=not args.no_hands, face=bool(args.face_method),
+                        hands=not args.no_hands, face=bool(args.face_method), gaze=args.gaze,
                         hand_failure=hand_failure,
                         multi_person="\n".join(m for m in (people, blips) if m))
     (output_dir / "summary.json").write_text(json.dumps(qc, indent=2))
@@ -1427,7 +1439,8 @@ def _run_stages(args, output_dir: Path, timer: Timer) -> None:
             print(f"  {k + ':':16s}{v:.1%}" if k in pct else f"  {k + ':':16s}{v}")
     for stage, state in qc["stages"].items():
         if state != "on":
-            print(f"  {stage + ':':16s}{state} (disabled on the command line)")
+            print(f"  {stage + ':':16s}{state}"
+                  + (" (opt in with --gaze)" if stage == "gaze" else " (disabled on the command line)"))
     for w in qc["warnings"]:
         print(f"  [WARN] {w}")
     if qc["failures"]:

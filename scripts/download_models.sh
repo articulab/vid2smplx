@@ -175,6 +175,8 @@ echo ""
 # The upstream Google-Drive folder 404s (link rot) and gdown cannot list folders
 # reliably anyway. The weight is mirrored in the ArticuMotion checkpoints repo and
 # fetched here exactly like every other HF-hosted weight above.
+# Gaze is opt-in at run time (`--gaze`); the weight is 85 MB, so it is still fetched here
+# rather than leaving a later --gaze run to fail on a missing file.
 echo "=== L2CS-Net Gaze Weights ==="
 L2CS_WEIGHTS="$REPO_DIR/models/L2CSNet_gaze360.pkl"
 L2CS_SHA256="8a7f3480d868dd48261e1d59f915b0ef0bb33ea12ea00938fb2168f212080665"

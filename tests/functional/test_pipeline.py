@@ -76,7 +76,7 @@ def run(clip) -> Path:
     if not (out_dir / "SUCCESS").exists():
         shutil.rmtree(out_dir, ignore_errors=True)
         subprocess.check_call([sys.executable, "-m", "vid2smplx.cli", "run", str(clip),
-                               "--full-debug", "--seed", str(SEED), "--output-dir", str(OUT / "output"),
+                               "--full-debug", "--gaze", "--seed", str(SEED), "--output-dir", str(OUT / "output"),
                                "--skip-doctor"], cwd=REPO)
     assert (out_dir / "SUCCESS").exists()
     return out_dir

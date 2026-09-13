@@ -36,15 +36,17 @@ A single `.npz` per video:
 | `jaw_pose` | (T, 3) | EMICA, jaw rotation |
 | `expression` | (T, 100) | EMICA, FLAME 2020 expression coefficients |
 | `leye_pose` / `reye_pose` | (T, 3) | EMICA, eye rotations |
-| `gaze_pitch` / `gaze_yaw` | (T,) | L2CS-Net, gaze direction in radians |
-| `blink_left` / `blink_right` | (T,) | MediaPipe, Eye Aspect Ratio (low = closed) |
+| `gaze_pitch` / `gaze_yaw` | (T,) | L2CS-Net, gaze direction in radians. Requires `--gaze` |
+| `blink_left` / `blink_right` | (T,) | MediaPipe, Eye Aspect Ratio (low = closed). Requires `--gaze` |
 | `left_hand_valid` / `right_hand_valid` | (T,) | per-frame hand detection mask |
 | `face_valid` | (T,) | per-frame face detection mask |
-| `gaze_valid` | (T,) | per-frame gaze detection mask |
+| `gaze_valid` | (T,) | per-frame gaze detection mask. All `False` without `--gaze` |
 | `K_fullimg` | (T, 3, 3) | GVHMR, camera intrinsic matrix |
 | `num_frames` | scalar | total frame count |
 | `coord_system` | string | `"global"` (world-space) |
 | `fps` | scalar | frame rate of the source video |
+
+Gaze and blink are opt-in: pass `--gaze` to run them. They are experimental — see [Known limitations](#known-limitations).
 
 No stage resamples: outputs keep the source video's frame rate, which is stored in `fps`. Frame index alone is not a time base — this corpus mixes 25 and 29.97.
 
@@ -84,6 +86,29 @@ Every step caches, so rerunning a clip resumes where it stopped. Full option lis
 - [Benchmarks](docs/benchmarks.md) — per-stage time, VRAM and GPU utilization; what hardware you need
 - [Comparison with SMPLest-X](docs/comparison.md) — GIFs and timings
 - [cleps cluster](docs/CLEPS_SETUP.md) — bringup and SLURM arrays on the Inria cleps cluster
+
+## Known limitations
+
+What these mean for the numbers in your `smplx_params.npz`:
+
+- **Eye pose is a proxy, not a measurement.** `leye_pose` / `reye_pose` are a normalised
+  2-D iris offset scaled by a fixed constant and written into a slot SMPL-X reads as
+  axis-angle radians (`scripts/run_emica.py`). Nothing calibrates that scale, so the
+  magnitudes are not in radians in any meaningful sense. This is why gaze and blink are
+  opt-in (`--gaze`) and why the default run leaves these channels at zero.
+- **Blink validity follows the face box, not the landmarks.** `gaze_blink.npz` marks a
+  frame valid when a face bounding box exists, even when MediaPipe found no eye landmarks
+  in it (`scripts/run_gaze_blink.py`). Such frames carry `blink_left`/`blink_right` of
+  exactly `0.0`, which is indistinguishable from a fully closed eye. Treat an exact `0.0`
+  as missing, not as a blink.
+- **One person per video.** The npz holds exactly one body, and one left and one right
+  hand per frame; with several people in frame the extra hand detections overwrite each
+  other (`scripts/merge_body_hands.py`), while the debug overlay renders all of them. A
+  video where the overlay shows more hands than one person has is a video whose npz you
+  should not trust. `run` refuses a multi-person clip unless you pass `--person N`.
+- **IK output is not checked for finiteness.** `scripts/ik_hands.py` writes its solved
+  poses straight to the npz; if the solve diverges, `NaN` reaches the file. Check
+  `np.isfinite(d["body_pose"]).all()` before using a result.
 
 ## Models and citations
 

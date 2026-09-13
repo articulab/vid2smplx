@@ -1,4 +1,5 @@
 """Smoke tests that need no GPU, no conda env, no weights.  Run: python -m pytest tests/  (or python tests/test_cli.py)"""
+import json
 import os
 import shutil
 import subprocess
@@ -696,7 +697,7 @@ def test_regenerated_gaze_forces_a_re_merge(tmp_path, monkeypatch, capsys):
     import numpy as np
     from vid2smplx import cli
     video, out_base, calls = _seed_finished_run(tmp_path, monkeypatch)
-    argv = ["run", str(video), "--output-dir", str(out_base), "--skip-doctor"]
+    argv = ["run", str(video), "--output-dir", str(out_base), "--gaze", "--skip-doctor"]
 
     cli.cmd_run(build_parser().parse_args(argv))
     assert any("merge_body_hands.py" in " ".join(c) for c in calls)
@@ -759,3 +760,75 @@ def test_render_on_an_untouched_run_dir_still_validates(tmp_path):
     a = build_parser().parse_args(["render", str(d), "--layers", "final,global"])
     errs = []; validate_render_args(a, errs.append)
     assert errs == []
+
+
+# ---- gaze/blink are opt-in: uncalibrated columns must not ship to someone who
+#      never asked for them (README "Known limitations") ----
+
+def test_gaze_does_not_run_by_default(tmp_path, monkeypatch, capsys):
+    from vid2smplx import cli
+    video, out_base, calls = _seed_finished_run(tmp_path, monkeypatch)
+
+    cli.cmd_run(build_parser().parse_args(
+        ["run", str(video), "--output-dir", str(out_base), "--skip-doctor"]))
+
+    flat = [" ".join(c) for c in calls]
+    assert not any("run_gaze_blink.py" in c for c in flat), flat
+    assert not any("--gaze_blink_result" in c for c in flat), \
+        "merge was still fed a previous run's gaze_blink.npz"
+    out = capsys.readouterr().out
+    assert "Step 3.5: Gaze + Blink (SKIPPED" in out
+    assert json.loads((out_base / "A" / "summary.json").read_text())["stages"]["gaze"] == "SKIPPED"
+
+
+def test_gaze_runs_when_asked_for(tmp_path, monkeypatch):
+    """The negative test above must not be satisfiable by never running gaze at all."""
+    from vid2smplx import cli
+    video, out_base, calls = _seed_finished_run(tmp_path, monkeypatch)
+
+    cli.cmd_run(build_parser().parse_args(
+        ["run", str(video), "--output-dir", str(out_base), "--gaze", "--skip-doctor"]))
+
+    flat = [" ".join(c) for c in calls]
+    assert any("--gaze_blink_result" in c for c in flat), flat
+    assert json.loads((out_base / "A" / "summary.json").read_text())["stages"]["gaze"] == "on"
+
+
+def test_no_face_overrides_gaze(tmp_path, monkeypatch):
+    from vid2smplx import cli
+    video = tmp_path / "v.mp4"; video.write_bytes(b"x")
+    monkeypatch.setattr(cli, "probe_video", lambda v: "")
+    argv = ["run", str(video), "--no-face", "--gaze"]
+    a = build_parser().parse_args(argv)
+    validate_run_args(a, argv, lambda m: pytest.fail(m))
+    assert a.gaze is False and a.face_method == ""
+
+
+def test_doctor_does_not_demand_the_l2cs_weight_unless_gaze_is_asked_for(tmp_path, capsys):
+    """A novice who never opts into gaze should not be nagged to download 85 MB."""
+    from vid2smplx.checks import doctor
+    doctor(repo=tmp_path, check_env=False, check_patches=False, home=tmp_path,
+           skip={"Gaze"})
+    assert "L2CSNet_gaze360.pkl" not in capsys.readouterr().out
+
+    doctor(repo=tmp_path, check_env=False, check_patches=False, home=tmp_path)
+    assert "L2CSNet_gaze360.pkl" in capsys.readouterr().out
+
+
+def test_a_default_run_skips_gaze_in_the_doctor_it_actually_calls(tmp_path, monkeypatch):
+    """Gate the real code path, not a hand-built skip set."""
+    from vid2smplx import cli
+    video, out_base, _calls = _seed_finished_run(tmp_path, monkeypatch)
+    seen = []
+    monkeypatch.setattr("vid2smplx.checks.doctor",
+                        lambda *a, **kw: (seen.append(kw.get("skip", set())), True)[1])
+
+    monkeypatch.setattr(cli, "probe_video", lambda v: "")
+
+    cli._main(["run", str(video), "--output-dir", str(out_base)])
+    assert seen and "Gaze" in seen[0], seen
+    seen.clear()
+    cli._main(["run", str(video), "--output-dir", str(out_base), "--gaze"])
+    assert seen and "Gaze" not in seen[0], seen
+
+

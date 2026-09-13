@@ -18,6 +18,7 @@ Every step caches its output; rerunning a clip skips finished steps.
 | `--full-debug` | off | render every intermediate video (body, hands, face, global views) |
 | `--no-hands` | off | skip HaMeR |
 | `--no-face` | off | skip EMICA, gaze and blink |
+| `--gaze` | **off** | also estimate gaze and blink. Experimental and uncalibrated — see [Known limitations](../README.md#known-limitations). Ignored with `--no-face`. |
 | `--percent N` | 100 | process only the first N% (quick tests) |
 | `--downsample N` | 1 | run hands on every Nth frame |
 | `--batch-size N` | 48 | HaMeR batch size (lower if OOM) |
@@ -122,8 +123,8 @@ Arrays keep the source video's frame rate (no stage resamples); it is stored in 
 | `jaw_pose` | (T, 3) | EMICA |
 | `expression` | (T, 100) | EMICA, FLAME 2020 expression coefficients |
 | `leye_pose` / `reye_pose` | (T, 3) | EMICA |
-| `gaze_pitch` / `gaze_yaw` | (T,) | L2CS-Net, radians |
-| `blink_left` / `blink_right` | (T,) | MediaPipe eye aspect ratio (low = closed) |
+| `gaze_pitch` / `gaze_yaw` | (T,) | L2CS-Net, radians. Zero unless the run used `--gaze` |
+| `blink_left` / `blink_right` | (T,) | MediaPipe eye aspect ratio (low = closed). Zero unless the run used `--gaze` |
 | `left_hand_valid` / `right_hand_valid` / `face_valid` / `gaze_valid` | (T,) bool | per-frame detection masks |
 | `K_fullimg` | (T, 3, 3) | camera intrinsics |
 | `num_frames` | scalar | T |

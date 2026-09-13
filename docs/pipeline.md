@@ -11,7 +11,7 @@ Video --> GVHMR --> HaMeR --> EMICA --> L2CS-Net --> MediaPipe --> Merge --> IK 
 | 1 | body pose + global trajectory | `GVHMR/tools/demo/demo.py` |
 | 2 | hand pose (HaMeR, reusing GVHMR person bboxes) | `scripts/run_hamer_video.py` |
 | 3 | face (EMICA / FLAME) | `scripts/run_emica.py` |
-| 3.5 | gaze (L2CS-Net) + blink (MediaPipe EAR) | `scripts/run_gaze_blink.py` |
+| 3.5 | gaze (L2CS-Net) + blink (MediaPipe EAR) — opt-in, `--gaze` | `scripts/run_gaze_blink.py` |
 | 4 | merge into one SMPL-X npz | `scripts/merge_body_hands.py` |
 | 4.5 | wrist IK so HaMeR hands sit on the GVHMR arms | `scripts/ik_hands.py` |
 | 5 | renders (`--final-incam` / `--full-debug`) | `scripts/render.py` |
