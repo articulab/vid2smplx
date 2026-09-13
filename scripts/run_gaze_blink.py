@@ -19,7 +19,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from utils import LEFT_EYE_EAR, RIGHT_EYE_EAR, crop_face
+from utils import LEFT_EYE_EAR, RIGHT_EYE_EAR, crop_face, save_npz_atomic
 
 
 # ---------------------------------------------------------------------------
@@ -312,7 +312,7 @@ def main() -> None:
         "timestep_id": valid_indices.astype(np.int64),
     }
 
-    np.savez_compressed(str(final_npz), **save_dict)
+    save_npz_atomic(final_npz, **save_dict)
     dt = time.time() - t_start
     print(f"\n  [OK] Saved: {final_npz} ({final_npz.stat().st_size / 1024:.1f} KB)")
     print(f"  Frames processed: {len(valid_indices)}/{total_frames}")

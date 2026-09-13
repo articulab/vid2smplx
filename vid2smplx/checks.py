@@ -6,6 +6,7 @@ and creates the symlinks the submodules expect.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -13,36 +14,93 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 
-# (group, relative path, how to get it). "auto" = scripts/download_models.sh fetches it.
+# (group, relative path, how to get it, min bytes). "auto" = scripts/download_models.sh fetches it.
+# min_bytes catches truncated downloads that exists() passes and torch.load dies on;
+# each is a safe floor (~90% of the real artifact), never an exact size.
 MODELS = [
-    ("GVHMR", "GVHMR/inputs/checkpoints/gvhmr/gvhmr_siga24_release.ckpt", "auto"),
-    ("GVHMR", "GVHMR/inputs/checkpoints/hmr2/epoch=10-step=25000.ckpt", "auto"),
-    ("GVHMR", "GVHMR/inputs/checkpoints/vitpose/vitpose-h-multi-coco.pth", "auto"),
-    ("GVHMR", "GVHMR/inputs/checkpoints/yolo/yolov8x.pt", "auto"),
-    ("GVHMR", "GVHMR/inputs/checkpoints/dpvo/dpvo.pth", "auto"),
-    ("HaMeR", "hamer/_DATA/hamer_ckpts/checkpoints/hamer.ckpt", "auto"),
-    ("HaMeR", "hamer/_DATA/data/mano_mean_params.npz", "auto"),
-    ("EMICA", "models/inferno/FaceReconstruction/models", "auto"),
-    ("EMICA", "models/inferno/mica/model/mica.tar", "auto"),
-    ("EMICA", "inferno/assets/FLAME/geometry/generic_model.pkl", "auto (EMOCA FLAME.zip)"),
-    ("EMICA", "~/.insightface/models/antelopev2/scrfd_10g_bnkps.onnx", "auto (inferno loads insightface from ~/.insightface)"),
-    ("Hands", "models/mediapipe/hand_landmarker.task", "auto"),
+    ("GVHMR", "GVHMR/inputs/checkpoints/gvhmr/gvhmr_siga24_release.ckpt", "auto", 140_000_000),
+    ("GVHMR", "GVHMR/inputs/checkpoints/hmr2/epoch=10-step=25000.ckpt", "auto", 2_400_000_000),
+    ("GVHMR", "GVHMR/inputs/checkpoints/vitpose/vitpose-h-multi-coco.pth", "auto", 2_200_000_000),
+    ("GVHMR", "GVHMR/inputs/checkpoints/yolo/yolov8x.pt", "auto", 120_000_000),
+    ("GVHMR", "GVHMR/inputs/checkpoints/dpvo/dpvo.pth", "auto", 12_000_000),
+    ("HaMeR", "hamer/_DATA/hamer_ckpts/checkpoints/hamer.ckpt", "auto", 2_400_000_000),
+    ("HaMeR", "hamer/_DATA/data/mano_mean_params.npz", "auto", 1_000),
+    ("EMICA", "models/inferno/FaceReconstruction/models", "auto", 2_300_000_000),
+    ("EMICA", "models/inferno/mica/model/mica.tar", "auto", 450_000_000),
+    ("EMICA", "inferno/assets/FLAME/geometry/generic_model.pkl", "auto (EMOCA FLAME.zip)", 47_000_000),
+    ("EMICA", "~/.insightface/models/antelopev2/scrfd_10g_bnkps.onnx",
+     "auto (inferno loads insightface from ~/.insightface)", 15_000_000),
+    ("Hands", "models/mediapipe/hand_landmarker.task", "auto", 7_000_000),
     ("Gaze", "models/L2CSNet_gaze360.pkl",
-     "gdown or manual: https://drive.google.com/drive/folders/17p6ORr-JQJcw-eYtG2WGNiuS_qVKwdWd -> models/"),
+     "auto (HF mirror: ymachta/articumotion-checkpoints)", 85_000_000),
     ("SMPL-X", "models/smplx/SMPLX_NEUTRAL.npz",
-     "register at https://smpl-x.is.tue.mpg.de/ (SMPL-X v1.1 NPZ) -> unzip to models/smplx/"),
+     "register at https://smpl-x.is.tue.mpg.de/ (SMPL-X v1.1 NPZ) -> unzip to models/smplx/", 95_000_000),
+    # Ships inside the same SMPL-X v1.1 archive but is easy to miss when only the
+    # NPZ zip is extracted; scripts/ik_hands.py hard-fails without it.
+    ("SMPL-X", "models/smplx/MANO_SMPLX_vertex_ids.pkl",
+     "from the SMPL-X v1.1 archive (models_smplx_v1_1.zip) -> models/smplx/", 12_000),
     ("MANO", "models/mano/MANO_RIGHT.pkl",
-     "register at https://mano.is.tue.mpg.de/ (MANO v1.2) -> unzip to models/mano/"),
+     "register at https://mano.is.tue.mpg.de/ (MANO v1.2) -> unzip to models/mano/", 3_400_000),
 ]
 
 # Submodules hard-code their own asset paths; we point them at models/ with symlinks.
-# (link location, target) — both relative to repo root.
+# (group, link location, target) — paths relative to repo root. The group is the same
+# key `skip` uses for MODELS: a link into EMICA assets is as skippable as the assets.
 LINKS = [
-    ("GVHMR/inputs/checkpoints/body_models/smplx", "models/smplx"),
-    ("hamer/_DATA/data/mano", "models/mano"),
-    ("inferno/assets/FaceReconstruction", "models/inferno/FaceReconstruction"),
-    ("inferno/assets/MICA", "models/inferno/mica"),
+    ("SMPL-X", "GVHMR/inputs/checkpoints/body_models/smplx", "models/smplx"),
+    ("MANO", "hamer/_DATA/data/mano", "models/mano"),
+    ("EMICA", "inferno/assets/FaceReconstruction", "models/inferno/FaceReconstruction"),
+    ("EMICA", "inferno/assets/MICA", "models/inferno/mica"),
 ]
+
+# The FLOOR, not the typical peak: batches are sized from free VRAM (auto_batch.py), so the same
+# clip measured 5.1 GB on an 8 GB card and 12.3 GB on a 46 GB one. Long video wants ~16 GB --
+# that is vram_warning's job below. README and docs/install.md must state this same number.
+MIN_VRAM_GB = 8
+
+# GVHMR's HMR4D pass USED to build a dense (L, L) attention mask, which made VRAM
+# quadratic in frames (a 38.10 GiB allocation at 35,755 frames). GVHMR 8be5155 carries
+# banded attention, so the window is never materialised and the quadratic term is gone.
+# Deliberately a CEILING, applied at every length, from the 13,710 MiB measured at 35,755 frames
+# on a 45 GB rtx8000 (docs/benchmarks.md). Real peaks under ea4ba35 are LOWER -- 9.7 GB flat from
+# 727 to 12,526 frames -- because batches size to free VRAM, so this over-estimates every length
+# measured so far. That is the safe direction: it only WARNS, and never refuses.
+GVHMR_BASE_GB = 13.7
+
+# Banded attention peak, measured standalone on rtx8000 at the same shapes GVHMR uses
+# (8 heads x 64 dims, 2048-frame query blocks): 0.81 GiB at 16k frames, 3.78 GiB at 35,755.
+# It sits under the 13.7 GB the ViT stages already hold, so it does not move the peak;
+# kept as a term so the estimate still rises for sequences far beyond anything measured.
+GVHMR_BAND_GB_PER_FRAME = 3.78 / 35755
+
+GVHMR_MEASURED_TO_FRAMES = 35755      # measured at 13.7 GB up to here
+
+
+def gvhmr_vram_estimate_gb(frames: int) -> float:
+    """Rough peak VRAM for GVHMR on `frames` frames, from the measured points."""
+    if frames <= GVHMR_MEASURED_TO_FRAMES:
+        return GVHMR_BASE_GB          # measured, not extrapolated
+    return GVHMR_BASE_GB + GVHMR_BAND_GB_PER_FRAME * float(frames)
+
+
+def vram_warning(frames: int, available_gb: float) -> str:
+    """'' when the clip should fit, else an actionable warning. Estimate, so never fatal."""
+    if not frames or available_gb <= 0:
+        return ""
+    need = gvhmr_vram_estimate_gb(frames)
+    if need <= available_gb * 0.95:
+        return ""
+    return (
+        f"This clip is {frames:,} frames and GVHMR needs an estimated {need:.0f} GB of VRAM, "
+        f"but this GPU has {available_gb:.0f} GB. GVHMR is the longest stage — on a 20-min "
+        f"video it can run for over an hour before failing.\n"
+        f"  Do one of these instead:\n"
+        f"    - run on a GPU with at least ~16 GB, or\n"
+        f"    - cut the video into pieces and process them separately.\n"
+        f"  GVHMR's memory is now roughly FLAT in clip length (measured 13.7 GB at both 12,520 "
+        f"and 35,755 frames, docs/benchmarks.md) — it used to be quadratic. This is an estimate; "
+        f"it is a warning, not a refusal."
+    )
 
 IMPORTS = ["torch", "pytorch3d", "smplx", "hmr4d", "hamer", "inferno", "detectron2",
            "ultralytics", "insightface", "l2cs", "mediapipe", "pytorch_lightning"]
@@ -57,9 +115,18 @@ def in_env() -> bool:
 def make_links(repo: Path = REPO) -> list[str]:
     """Create missing symlinks. Returns list of links created."""
     made = []
-    for link, target in LINKS:
+    for _group, link, target in LINKS:
         link_p, target_p = repo / link, repo / target
-        if link_p.exists() or link_p.is_symlink():
+        if link_p.is_symlink():
+            continue                      # already a link; leave it alone
+        if link_p.is_dir():
+            # A submodule tarball can extract an EMPTY dir here, which silently
+            # shadows the symlink and hides the real assets (HaMeR's mano).
+            # Replace it when empty; a dir with content is deliberate, keep it.
+            if any(link_p.iterdir()):
+                continue
+            link_p.rmdir()
+        elif link_p.exists():
             continue
         link_p.parent.mkdir(parents=True, exist_ok=True)
         link_p.symlink_to(target_p)
@@ -69,14 +136,22 @@ def make_links(repo: Path = REPO) -> list[str]:
 
 def _check_env(env: str) -> list[tuple[str, str, str]]:
     """Import every dependency inside the conda env. Returns (status, name, note)."""
-    code = ("import importlib,shutil,sys\n"
-            "print('OK' if shutil.which('ffmpeg') else 'MISS', 'ffmpeg', '' if shutil.which('ffmpeg') else 'apt/conda install ffmpeg')\n"
+    code = ("import importlib,shutil,sys,os.path\n"
+            # ffprobe is as load-bearing as ffmpeg (cli.py probes every input) and was
+            # unchecked -- doctor passed while `vid2smplx run` died on FileNotFoundError.
+            # Also look beside sys.executable: install.sh never activates the env, so a
+            # vendored binary in <env>/bin is invisible to shutil.which().
+            "for _b in ('ffmpeg','ffprobe'):\n"
+            "  _p = shutil.which(_b) or os.path.join(os.path.dirname(sys.executable), _b)\n"
+            "  _ok = os.path.exists(_p)\n"
+            "  print('OK' if _ok else 'MISS', _b, (_p if not shutil.which(_b) else '') if _ok else 'install it, or re-run install.sh (vendors static-ffmpeg)')\n"
             "for m in sys.argv[1:]:\n"
             "  try: importlib.import_module(m); print('OK', m)\n"
             "  except Exception as e: print('MISS', m, str(e).splitlines()[0][:80])\n"
             "try:\n"
             "  import torch; print('OK' if torch.cuda.is_available() else 'MISS', 'cuda',\n"
-            "    torch.cuda.get_device_name(0)+f' ({torch.cuda.get_device_properties(0).total_memory>>30} GB)' if torch.cuda.is_available() else 'torch.cuda.is_available() is False')\n"
+            # round, not floor: >>30 showed an 8 GiB card (~7.996) as '7 GB' and WARNed it.
+            "    torch.cuda.get_device_name(0)+f' ({round(torch.cuda.get_device_properties(0).total_memory/2**30)} GB)' if torch.cuda.is_available() else 'torch.cuda.is_available() is False')\n"
             "except Exception as e: print('MISS', 'cuda', str(e)[:80])\n")
     if in_env():
         cmd = [sys.executable, "-W", "ignore", "-c", code, *IMPORTS]
@@ -93,6 +168,30 @@ def _check_env(env: str) -> list[tuple[str, str, str]]:
     return rows
 
 
+def _vram_row(row: tuple[str, str, str]) -> tuple[str, str, str]:
+    """Downgrade an OK cuda row to WARN below MIN_VRAM_GB — it works for short clips, so never fatal."""
+    status, name, note = row
+    if name != "cuda" or status != "OK":
+        return row
+    m = re.search(r"\((\d+) GB\)", note)
+    if m and int(m.group(1)) < MIN_VRAM_GB:
+        return ("WARN", name, f"{note} — below the documented minimum of {MIN_VRAM_GB} GB; "
+                              f"expect OOM on long or high-resolution clips, use --percent to shorten")
+    return row
+
+
+def file_status(p: Path, min_bytes: int) -> tuple[str, str]:
+    """('OK'|'MISS'|'CORRUPT', note) for one weight file or asset dir, by size not existence."""
+    if not p.exists():
+        return "MISS", ""
+    size = sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) if p.is_dir() else p.stat().st_size
+    if size < min_bytes:
+        return "CORRUPT", (f"only {size} bytes, expected >= {min_bytes} — truncated or failed download "
+                           f"(a gdown rate-limit page saves as HTML). Re-run `vid2smplx download`: "
+                           f"it re-fetches anything under its floor")
+    return "OK", ""
+
+
 def resolve(rel: str, repo: Path, home: Path | None = None) -> Path:
     """Repo-relative path, or a `~/...` path under `home` (defaults to the real home)."""
     if rel.startswith("~/"):
@@ -101,32 +200,49 @@ def resolve(rel: str, repo: Path, home: Path | None = None) -> Path:
 
 
 def doctor(repo: Path = REPO, env: str | None = None, check_env: bool = True, skip: set[str] = frozenset(),
-           home: Path | None = None) -> bool:
+           home: Path | None = None, check_patches: bool = True) -> bool:
     """Print readiness table. Returns True when everything is present. `skip` = model groups not needed."""
     env = env if env is not None else os.environ.get("CONDA_ENV", "vid2smplx")
     rows: list[tuple[str, str, str]] = []
     if check_env:
         rows += _check_env(env)   # imports + ffmpeg + CUDA, evaluated inside the pipeline env
-    for group, rel, how in MODELS:
+    for group, rel, how, min_bytes in MODELS:
         if group in skip:
             continue
-        ok = resolve(rel, repo, home).exists()
-        rows.append(("OK" if ok else "MISS", f"{group}: {rel}", "" if ok else how))
-    for link, target in LINKS:
+        status, note = file_status(resolve(rel, repo, home), min_bytes)
+        rows.append((status, f"{group}: {rel}", note or ("" if status == "OK" else how)))
+    for group, link, target in LINKS:
+        if group in skip:
+            continue
         p = repo / link
-        ok = p.is_symlink() or p.exists()
-        rows.append(("OK" if ok else "MISS", f"link: {link}", "" if ok else f"run `vid2smplx download` (ln -s {target})"))
+        # `exists()` alone passes an empty dir shadowing the link -- that reports
+        # OK while the assets are invisible to the submodule. Require content.
+        if p.is_symlink():
+            ok = p.exists()               # a dangling symlink is not OK
+        elif p.is_dir():
+            ok = any(p.iterdir())
+        else:
+            ok = p.exists()
+        note = "" if ok else f"run `vid2smplx download` (ln -s {target}); an EMPTY dir here shadows the link"
+        rows.append(("OK" if ok else "MISS", f"link: {link}", note))
 
-    missing = [r for r in rows if r[0] == "MISS"]
+    if check_patches:
+        # An unpatched GVHMR makes the multi-person guard silently inert.
+        from .setup_submodules import patch_status
+        rows += patch_status(repo)
+
+    rows = [_vram_row(r) for r in rows]
+    bad = [r for r in rows if r[0] in ("MISS", "CORRUPT")]
     for status, name, note in rows:
-        tag = "[OK]  " if status == "OK" else "[MISS]"
+        tag = {"OK": "[OK]  ", "WARN": "[WARN]"}.get(status, f"[{status}]")
         print(f"  {tag} {name}" + (f"\n         -> {note}" if note else ""))
     print()
-    if missing:
-        print(f"  {len(missing)} item(s) missing. Fix the lines marked [MISS] above, then rerun `vid2smplx doctor`.")
+    if bad:
+        print(f"  {len(bad)} item(s) missing or unusable. Fix the lines marked [MISS]/[CORRUPT] above, "
+              f"then rerun `vid2smplx doctor`.")
     else:
         print("  All checks passed. Try: vid2smplx run examples/clip_talking.mp4 --percent 10 --final-incam")
-    return not missing
+    return not bad
 
 
 if __name__ == "__main__":

@@ -4,7 +4,9 @@
     pytest -m functional tests/functional --update-golden   # accept the current output as reference
 
 Outputs (renders, contact sheet, curves) land in tests/functional/out/ for eyeballing.
-Seeding makes CPU-side RNG exact; GPU kernels are not bit-exact, so the golden comparison uses a tolerance.
+Seeding makes the pipeline deterministic on one machine (~1e-7 run to run) but NOT across machines
+(~0.027 rad / ~0.088 betas measured), so the golden carries its provenance and test_golden branches on it.
+See vid2smplx/provenance.py and docs/install.md.
 """
 from __future__ import annotations
 
@@ -16,11 +18,20 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from vid2smplx.provenance import (PROVENANCE_KEY, capture_environment, code_differences,
+                                  compare_environment, describe, golden_unusable, mismatch_message,
+                                  read_provenance, verdict, write_golden)
+
 pytestmark = pytest.mark.functional
 
 REPO = Path(__file__).resolve().parents[2]
 OUT = Path(__file__).resolve().parent / "out"
-GOLDEN = Path(__file__).resolve().parent / "golden" / "smplx_params.npz"
+GOLDEN_DIR = Path(__file__).resolve().parent / "golden"
+# One golden per (clip, length): the fast default (clip_talking, 1.5 s, 38 frames) is the
+# everyday regression check; clip_dancing at 20 s exercises the arms and the IK path, which a
+# talking head never does. Derived from the clip stem so any --clip/--seconds pair gets its own.
+def golden_for(clip: Path) -> Path:
+    return GOLDEN_DIR / f"{clip.stem}.npz"
 SEED = 0
 # (key, trailing shape) — T is the frame count
 NPZ_SPEC = {
@@ -31,8 +42,13 @@ NPZ_SPEC = {
     "left_hand_valid": (), "right_hand_valid": (), "face_valid": (), "gaze_valid": (),
     "K_fullimg": (3, 3),
 }
-# tolerance for golden comparison, per key family (radians / metres / unitless)
+# tolerance for golden comparison, per key family (radians / metres / unitless).
+# Used when the golden was produced in THIS environment; run-to-run noise there is ~1e-7.
 TOL = {"transl": 2e-2, "betas": 5e-2, "gaze": 5e-2, "blink": 5e-2, "expression": 0.1, "default": 2e-2}
+# Envelope for a golden from a DIFFERENT environment. Measured cross-machine drift with no code
+# change: ~0.027 rad on non-arm body_pose, ~0.088 on betas. Values are ~2x that, so anything over
+# is too big to blame on hardware; the un-IK'd-arms regression (0.54 rad) is far above either.
+TOL_CROSS_ENV = {"transl": 6e-2, "betas": 0.2, "gaze": 0.1, "blink": 0.1, "expression": 0.3, "default": 6e-2}
 
 
 def _ffprobe_frames(video: Path) -> int:
@@ -164,19 +180,10 @@ def test_visualize(run, params, T):
     print(f"\n  eyeball: {OUT/'contact_sheet.png'}  {OUT/'curves.png'}  {run/'render/final_incam.mp4'}")
 
 
-def test_golden(request, params, run):
-    """Compare against the accepted reference. First run: skip and tell the user how to accept."""
-    if request.config.getoption("--update-golden"):
-        GOLDEN.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(run / "smplx_params.npz", GOLDEN)
-        pytest.skip(f"golden updated: {GOLDEN}")
-    if not GOLDEN.exists():
-        pytest.skip(f"no golden yet — eyeball {OUT} then rerun with --update-golden")
-    ref = dict(np.load(GOLDEN, allow_pickle=True))
-    assert int(ref["num_frames"]) == int(params["num_frames"])
+def _compare(params, ref, tol_table) -> list:
     bad = []
     for key in NPZ_SPEC:
-        tol = next((v for k, v in TOL.items() if k in key), TOL["default"])
+        tol = next((v for k, v in tol_table.items() if k in key), tol_table["default"])
         a, b = params[key].astype(float), ref[key].astype(float)
         if key.endswith("_valid"):
             agree = (a == b).mean()
@@ -197,4 +204,76 @@ def test_golden(request, params, run):
         err = np.abs(a - b).max() if a.size else 0.0
         if err > tol:
             bad.append(f"{key}: max abs diff {err:.4f} > {tol}")
-    assert not bad, "\n".join(bad)
+    return bad
+
+
+def test_golden(request, params, run, clip):
+    """Compare against the accepted reference, at a tolerance that depends on the golden's provenance."""
+    GOLDEN = golden_for(clip)
+    env = capture_environment(REPO)
+    if request.config.getoption("--update-golden"):
+        write_golden(run / "smplx_params.npz", GOLDEN, env)
+        pytest.skip(f"golden updated: {GOLDEN}\n  provenance: {describe(env)}")
+    if not GOLDEN.exists():
+        pytest.skip(f"no golden yet — eyeball {OUT} then rerun with --update-golden")
+    ref = dict(np.load(GOLDEN, allow_pickle=True))
+    assert int(ref["num_frames"]) == int(params["num_frames"])
+    golden_env = read_provenance(ref)
+    # Before comparing numbers: a golden of unknown origin makes every verdict below
+    # unreachable except 'skip'. Say so and fail, rather than pass silently.
+    unusable = golden_unusable(golden_env)
+    if unusable:
+        pytest.fail(unusable)
+    env_diffs = compare_environment(golden_env, env)
+
+    bad_tight = _compare(params, ref, TOL)
+    bad_wide = _compare(params, ref, TOL_CROSS_ENV) if env_diffs else []
+    call = verdict(env_diffs, bad_tight, bad_wide)
+
+    if not env_diffs:
+        code = code_differences(golden_env, env) or ["none detected"]
+        note = (f"\n(same environment: {describe(env)}; run-to-run noise here is ~1e-7, so this is a\n"
+                "code change, not hardware. Code delta: " + "; ".join(code) + ")")
+        assert call == "pass", "\n".join(bad_tight) + note
+        return
+    msg = mismatch_message(golden_env, env, env_diffs,
+                           (bad_wide if call == "fail" else bad_tight) or ["(none — inside the tight tolerance anyway)"],
+                           over_envelope=call == "fail")
+    if call == "fail":
+        pytest.fail(msg)
+    pytest.skip(msg)
+
+
+@pytest.mark.functional
+def test_banded_attention_matches_dense_mask():
+    """GVHMR's banded attention must equal the dense (L, L) mask it replaced.
+
+    The dense mask costs a 38.10 GiB score tensor at 35,755 frames, so long videos now take
+    a blocked path that never materialises it. That path is only safe while it attends to
+    EXACTLY the same window, and a wrong window would still produce plausible motion — so
+    this compares the two implementations directly, with and without padding.
+    """
+    import torch
+    from hmr4d.network.base_arch.transformer.encoder_rope import BandMask, RoPEAttention
+
+    def dense(lo, hi, L):
+        j = torch.arange(L, device=lo.device)
+        return ~((j[None] >= lo[:, None]) & (j[None] < hi[:, None]))
+
+    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.manual_seed(0)
+    att = RoPEAttention(512, 8, dropout=0.1).to(dev).eval()
+    for L, valid in [(121, 121), (500, 463), (3000, 3000)]:
+        h, ml = 60, 120
+        i = torch.arange(L, device=dev)
+        lo = torch.clamp(i - h, min=0).clamp(max=L - ml)
+        hi = torch.clamp(i + h, max=L).clamp(min=ml)
+        x = torch.randn(2, L, 512, device=dev)
+        kp = torch.zeros(2, L, dtype=torch.bool, device=dev)
+        kp[:, valid:] = True
+        with torch.no_grad():
+            a = att(x, attn_mask=dense(lo, hi, L), key_padding_mask=kp)
+            b = att(x, attn_mask=BandMask(lo, hi), key_padding_mask=kp)
+        assert not torch.isnan(b).any(), f"banded attention produced NaN at L={L}"
+        rel = ((a - b).abs().max() / a.abs().max()).item()
+        assert rel < 1e-5, f"L={L}: banded vs dense relative error {rel:.3e} — not just fp32 rounding"

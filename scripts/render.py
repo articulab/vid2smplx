@@ -14,6 +14,7 @@ from pathlib import Path
 # Ensure GVHMR is on Python path so hmr4d imports work from any cwd
 _repo = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_repo / "GVHMR"))
+sys.path.insert(0, str(_repo))   # so `from vid2smplx import ...` works uninstalled too
 
 import cv2
 import numpy as np
@@ -560,7 +561,8 @@ def _load_ik_params(smplx_params_npz, length):
 # Layer rendering from clip directory
 # ---------------------------------------------------------------------------
 
-VALID_LAYERS = {"gvhmr", "hands", "face", "final", "global"}
+from vid2smplx import VALID_LAYERS as _VALID_LAYERS   # single source of truth, shared with the CLI
+VALID_LAYERS = set(_VALID_LAYERS)
 
 
 def render_layers(clip_dir: Path | str, layers: set[str], smplx_dir: Path | str, force: bool = False, video_override: Path | str | None = None) -> None:

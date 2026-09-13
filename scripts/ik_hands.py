@@ -24,7 +24,8 @@ import smplx
 import torch
 
 from hand_utils import load_hand_meshes, place_hands_dc
-from utils import load_mano_joint_regressor, one_euro_filter_np, smplx_forward_chunked
+from utils import (load_mano_joint_regressor, one_euro_filter_np, save_npz_atomic,
+                   smplx_forward_chunked)
 
 
 # ---------------------------------------------------------------------------
@@ -671,7 +672,7 @@ def main() -> None:
     save_data["ik_coverage"] = np.float32(ik_coverage)
     save_data["ik_n_targets"] = np.int64(n_targets)
 
-    np.savez(npz_path, **save_data)
+    save_npz_atomic(npz_path, compressed=False, **save_data)
     print(f"  [IK] Saved → {npz_path}")
     print("  [IK] Done!")
 

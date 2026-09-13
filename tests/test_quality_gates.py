@@ -45,8 +45,56 @@ def test_healthy_clip_is_clean():
         assert not qc["failures"] and not qc["warnings"], qc
 
 
+def test_disabled_stages_are_skipped_not_failed():
+    """--no-hands/--no-face: the absent stage is the user's intent, not a failure."""
+    with tempfile.TemporaryDirectory() as t:
+        p = _params(t, ik=False)
+        np.savez(p, **{**dict(np.load(p, allow_pickle=True)),
+                       "face_valid": np.zeros(100, bool), "gaze_valid": np.zeros(100, bool)})
+        qc = quality_report(p, {}, n_hand_det=None, hands=False, face=False)
+        assert not qc["failures"], qc["failures"]
+        assert not qc["warnings"], qc["warnings"]
+        assert qc["stages"] == {"hands": "SKIPPED", "face": "SKIPPED"}
+
+
 def test_missing_ik_fails():
     """ik_coverage absent means the IK stage never ran — arms are raw GVHMR."""
     with tempfile.TemporaryDirectory() as t:
         qc = quality_report(_params(t, hl=0.9, hr=0.9, ik=False), {}, n_hand_det=9999)
         assert any("ik_coverage" in f for f in qc["failures"]), qc
+
+
+def test_skipped_stages_report_no_coverage_numbers():
+    """--no-hands printed 'hands_left: 0.0' next to 'hands: SKIPPED' — it reads as a failure."""
+    with tempfile.TemporaryDirectory() as t:
+        qc = quality_report(_params(t, ik=False), {}, n_hand_det=None, hands=False, face=True)
+        assert "hands_left" not in qc and "hands_right" not in qc
+        assert qc["face"] == 1.0 and qc["gaze"] == 1.0
+        qc = quality_report(_params(t), {}, n_hand_det=5, hands=True, face=False)
+        assert "face" not in qc and "gaze" not in qc
+        assert "hands_left" in qc
+
+
+def test_absent_and_unreadable_hamer_output_are_different_faults():
+    """'no output file' and 'file exists but will not load' need different messages."""
+    from vid2smplx.cli import hamer_detection_count
+    with tempfile.TemporaryDirectory() as t:
+        missing = Path(t) / "nope.pt"
+        n, why = hamer_detection_count(missing)
+        assert n is None and "produced no output file" in why
+
+        broken = Path(t) / "hamer_hands.pt"
+        broken.write_bytes(b"not a torch file")
+        n, why = hamer_detection_count(broken)
+        assert n is None and "cannot be read" in why and "Delete it" in why
+        assert "produced no output file" not in why
+
+        qc = quality_report(_params(t, hl=0.9, hr=0.9), {}, n_hand_det=n, hand_failure=why)
+        assert qc["failures"] == [why]
+
+
+def test_multi_person_warning_reaches_the_summary():
+    with tempfile.TemporaryDirectory() as t:
+        qc = quality_report(_params(t, hl=0.9, hr=0.9), {}, n_hand_det=9,
+                            multi_person="2 people are in this video")
+        assert any("2 people" in w for w in qc["warnings"])

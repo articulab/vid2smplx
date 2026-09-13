@@ -78,6 +78,13 @@ for sub in external/FOCUS external/SwinTransformer external/TDDFA_V2 \
 done
 
 echo "  [OK] Submodules initialized"
+
+# GVHMR is our own fork; the submodule update above already delivered the patched code.
+# This only VERIFIES it arrived -- a missing marker means the checkout is at the wrong
+# commit, and without it GVHMR silently reconstructs one person and reports nothing about
+# anyone else in frame. Must run AFTER the submodule update. Pure stdlib, so plain
+# python3 -- the env does not exist yet at this phase. A failure aborts the install.
+python3 -m vid2smplx.setup_submodules
 echo ""
 
 # ---- Phase 2: Environment ----
@@ -159,6 +166,8 @@ pip_install \
     pyrender \
     yacs \
     xtcocotools \
+    json_tricks \
+    munkres \
     pandas \
     webdataset
 
@@ -170,18 +179,33 @@ echo "  Installing EMICA/Inferno dependencies..."
 pip_install --no-deps --no-build-isolation \
     insightface==0.6.2
 pip_install \
-    "numpy==1.23.5" onnx onnxruntime-gpu prettytable scikit-learn easydict   # numpy pinned: newer onnx pulls numpy 2, breaking insightface/ultralytics
+    "numpy==1.23.5" onnx onnxruntime-gpu prettytable scikit-learn easydict h5py   # numpy pinned: newer onnx pulls numpy 2, breaking insightface/ultralytics
 
 pip_install --no-deps \
     face-alignment==1.3.5 \
     facenet-pytorch==2.5.2 \
     kornia==0.6.5 \
     albumentations==1.0.3 \
-    mediapipe \
+    mediapipe==0.10.21 \
     munch \
     compress-pickle \
     hickle \
     decord
+
+# These must resolve their OWN dependencies (wandb needs docker-pycreds etc.), so they
+# are deliberately NOT in the --no-deps block above. inferno's face path imports all of
+# them at module level. wandb is pinned: 0.18.7 still ships protobuf-4 pb2 stubs, and
+# newer wandb needs protobuf>=5 which mediapipe 0.10.21 forbids.
+pip_install \
+    imgaug \
+    scikit-video \
+    wandb==0.18.7 \
+    soundfile \
+    python-speech-features \
+    torchgeometry \
+    torchfile \
+    loguru \
+    onnx2torch
 pip_install numba
 
 pip_install \
@@ -194,6 +218,11 @@ pip_install \
 
 # Safety net: anything above that dragged numpy to 2.x breaks insightface, chumpy and ultralytics
 pip_install "numpy==1.23.5"
+
+# mediapipe 0.10.21 needs protobuf<5 (FieldDescriptor.label); tensorboard 2.21 forces protobuf>=6
+# wandb is pinned to 0.18.7 above: it still ships protobuf-4 pb2 stubs. Newer wandb
+# needs protobuf>=5, which mediapipe 0.10.21 forbids -- the two meet here.
+pip_install "protobuf==4.25.8" "tensorboard==2.20.0"
 
 echo "  [OK] All pip packages installed"
 echo ""
@@ -210,6 +239,10 @@ pip_install -e "$REPO_DIR/GVHMR"
 echo "  Installing HaMeR..."
 pip_install --no-build-isolation -e "$REPO_DIR/hamer"
 
+# vitpose_model.py needs the ViTPose fork of mmpose (upstream has no ViT backbone)
+echo "  Installing ViTPose (mmpose fork)..."
+pip_install --no-deps --no-build-isolation -e "$REPO_DIR/hamer/third-party/ViTPose"
+
 echo "  Installing Inferno..."
 pip_install --no-deps --no-build-isolation -e "$REPO_DIR/inferno"
 
@@ -218,6 +251,31 @@ pip_install --no-deps -e "$REPO_DIR"
 
 echo "  [OK] Editable installs complete"
 echo ""
+
+# ---- ffmpeg / ffprobe -------------------------------------------------------
+# Both are hard runtime deps (trimming, metadata probe, excerpt render, muxing) and
+# neither is pip- nor apt-installable without root -- exactly the cluster situation:
+# nothing on PATH, no module, no sudo. static-ffmpeg vendors BOTH binaries (unlike
+# imageio-ffmpeg, which ships ffmpeg only and leaves `ffprobe` missing), so the env
+# ends up self-contained instead of borrowing the retired conda env's bin.
+if ! command -v ffmpeg &>/dev/null || ! command -v ffprobe &>/dev/null; then
+    echo "=== ffmpeg/ffprobe (not on PATH — vendoring static-ffmpeg) ==="
+    pip_install static-ffmpeg
+    # NOTE: use in_env, never a bare `python`: the env is never activated here, so
+    # bare python is whatever conda auto-activated (base on cleps) and the links
+    # would land in that SHARED env's bin.
+    read -r FF FP < <(in_env python -c "
+import static_ffmpeg.run as r
+a, b = r.get_or_fetch_platform_executables_else_raise()
+print(a, b)" 2>/dev/null) || true
+    BIN=$(dirname "$(in_env python -c "import sys;sys.stdout.write(sys.executable)")")
+    if [ -x "$FF" ] && [ -x "$FP" ]; then
+        ln -sf "$FF" "$BIN/ffmpeg"; ln -sf "$FP" "$BIN/ffprobe"
+        echo "  linked ffmpeg + ffprobe into $BIN"
+    else
+        echo "  [WARN] could not vendor ffmpeg/ffprobe; install them or add to PATH"
+    fi
+fi
 
 # ---- Phase 5: Model weights ----
 if [ "$ENV_ONLY" -eq 1 ]; then

@@ -14,7 +14,7 @@ import torch
 
 from utils import (
     rotmat_to_axis_angle, rotmat_batch_to_axis_angle,
-    load_mano_mean_hand_pose, MIN_KP_COUNT, MIN_KP_CONF,
+    load_mano_mean_hand_pose, MIN_KP_COUNT, MIN_KP_CONF, save_npz_atomic,
 )
 
 
@@ -403,7 +403,7 @@ def merge(gvhmr_path: Path | str, hamer_params_dir: Path | str | None, output_pa
 
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(output_path, **result)
+    save_npz_atomic(output_path, **result)
     print(f"  Saved: {output_path} ({output_path.stat().st_size / 1024:.1f} KB)")
 
     return result

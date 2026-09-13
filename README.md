@@ -15,8 +15,8 @@ vid2smplx runs five specialized models in sequence and merges their outputs into
 ## Pipeline
 
 ```
-Video --> GVHMR --> HaMeR --> EMICA --> L2CS-Net --> MediaPipe --> Merge --> smplx_params.npz
-           body     hands     face      gaze         blink
+Video --> GVHMR --> HaMeR --> EMICA --> L2CS-Net --> MediaPipe --> Merge --> IK --> smplx_params.npz
+           body     hands     face      gaze         blink                 wrists
 ```
 
 Each step caches its output. Rerunning skips completed steps.
@@ -44,14 +44,16 @@ A single `.npz` per video:
 | `K_fullimg` | (T, 3, 3) | GVHMR, camera intrinsic matrix |
 | `num_frames` | scalar | total frame count |
 | `coord_system` | string | `"global"` (world-space) |
+| `fps` | scalar | frame rate of the source video |
 
-All outputs are at 30 FPS.
+No stage resamples: outputs keep the source video's frame rate, which is stored in `fps`. Frame index alone is not a time base — this corpus mixes 25 and 29.97.
 
 ## Quickstart
 
 ```bash
-git clone --recursive https://github.com/articulab/vid2smplx.git && cd vid2smplx
-bash install.sh                 # conda env + deps + ~12 GB of weights, ends with `vid2smplx doctor`  (or: --uv)
+git clone git@github.com:articulab/vid2smplx.git    # private: SSH, and NOT --recursive
+cd vid2smplx
+bash install.sh                 # conda env + deps + ~16 GB of weights, ends with `vid2smplx doctor`  (or: --uv)
 # doctor will ask for SMPL-X and MANO (free registration) -> see docs/models.md
 conda activate vid2smplx
 vid2smplx run examples/clip_talking.mp4 --final-incam
@@ -59,14 +61,15 @@ vid2smplx run examples/clip_talking.mp4 --final-incam
 
 Result: `output/clip_talking/smplx_params.npz` + `render/final_incam.mp4`.
 
-Needs Linux, an NVIDIA GPU with 8 GB+ VRAM (5.1 GB measured, see [benchmarks](docs/benchmarks.md)), conda or uv, ~15 GB disk. Blackwell GPUs: see [docs/install.md](docs/install.md#blackwell-gpus-rtx-50xx-rtx-pro-sm_120).
+Needs Linux, conda or uv, ~23 GB disk, and an NVIDIA GPU: **8 GB** is enough for short clips, **~16 GB** for video over ~7 minutes. Peak VRAM adapts to the card (measured 5.1 GB on an 8 GB card, 12.3 GB on a 46 GB one, same clip) — see [benchmarks](docs/benchmarks.md). Blackwell GPUs: see [docs/install.md](docs/install.md#blackwell-gpus-rtx-50xx-rtx-pro-sm_120).
 
 ## Commands
 
 ```
 vid2smplx run <video.mp4> [--final-incam] [--full-debug] [--no-face] [--no-hands] [--percent N] [--cleanup]
 vid2smplx render <output/clip> --layers final,global,hands,face
-vid2smplx doctor                 # env, weights, symlinks -> [OK]/[MISS] table
+vid2smplx doctor                 # env, weights, symlinks, submodule patches -> [OK]/[MISS] table
+vid2smplx setup                  # verify GVHMR is at the pinned fork commit (install.sh does this)
 vid2smplx download               # fetch weights, create symlinks (idempotent)
 ```
 
@@ -80,6 +83,7 @@ Every step caches, so rerunning a clip resumes where it stopped. Full option lis
 - [Pipeline](docs/pipeline.md) — what each step does and which script runs it
 - [Benchmarks](docs/benchmarks.md) — per-stage time, VRAM and GPU utilization; what hardware you need
 - [Comparison with SMPLest-X](docs/comparison.md) — GIFs and timings
+- [cleps cluster](docs/CLEPS_SETUP.md) — bringup and SLURM arrays on the Inria cleps cluster
 
 ## Models and citations
 

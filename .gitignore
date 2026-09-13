@@ -1,5 +1,8 @@
 # Models (downloaded separately)
-models/*/
+# Everything under models/ is licensed weights or symlinks into a private tree:
+# ignore the lot, allow back only the two files that belong in the repo.
+# (`models/*/` matched directories only, so loose .pkl checkpoints and symlinks slipped through.)
+models/*
 !models/README.md
 !models/.gitkeep
 mano_v1_2/

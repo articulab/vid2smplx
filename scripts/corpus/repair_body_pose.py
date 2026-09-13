@@ -17,6 +17,10 @@ from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # moved into corpus/; utils.py is one up
+from utils import save_npz_atomic
+
 ARM_JOINTS = slice(15, 21)  # collar/shoulder/elbow/wrist chain the IK optimizes
 
 
@@ -50,9 +54,7 @@ def inspect(path):
 def repair(path):
     z = dict(np.load(path, allow_pickle=True))
     z["body_pose"] = z["body_pose_incam"].copy()
-    tmp = path + ".tmp.npz"
-    np.savez(tmp, **z)
-    os.replace(tmp, path)  # atomic on same filesystem
+    save_npz_atomic(path, compressed=False, **z)
     return path
 
 

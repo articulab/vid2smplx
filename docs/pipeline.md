@@ -16,8 +16,10 @@ Video --> GVHMR --> HaMeR --> EMICA --> L2CS-Net --> MediaPipe --> Merge --> IK 
 | 4.5 | wrist IK so HaMeR hands sit on the GVHMR arms | `scripts/ik_hands.py` |
 | 5 | renders (`--final-incam` / `--full-debug`) | `scripts/render.py` |
 
-`vid2smplx/cli.py` orchestrates: each step runs as a subprocess inside the conda env (`conda run -n $CONDA_ENV`),
-checks for its own output file and is skipped when it already exists. `vid2smplx/checks.py` is the single list of
+`vid2smplx/cli.py` orchestrates: each step runs as a subprocess, checks for its own output file and is
+skipped when it already exists. When the CLI is already inside the env (`conda activate`, or
+`source .venv/bin/activate` — the normal case, and the only one under `--uv`) the step runs with the
+current interpreter directly; only when invoked from outside any env does it wrap in `conda run -n $CONDA_ENV`. `vid2smplx/checks.py` is the single list of
 every weight file + symlink; `doctor`, `download` and `run`'s pre-flight all read it.
 
 Shared helpers live in `scripts/utils.py` (SMPL-X forward, MANO loading, filters) and `scripts/hand_utils.py`.

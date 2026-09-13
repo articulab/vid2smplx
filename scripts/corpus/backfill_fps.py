@@ -18,6 +18,10 @@ from pathlib import Path
 
 import numpy as np
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # moved into corpus/; utils.py is one up
+from utils import save_npz_atomic
+
 
 def probe_fps(video: Path) -> float | None:
     r = subprocess.run(
@@ -71,11 +75,7 @@ if not args.apply:
 for i, (f, fps) in enumerate(todo, 1):
     d = dict(np.load(f, allow_pickle=True))
     d["fps"] = np.float32(fps)
-    # np.savez appends .npz unless the name already ends in it, so name the
-    # temp file accordingly or os.replace looks for a file that was never written.
-    tmp = f.with_name(f.name + ".tmp.npz")
-    np.savez_compressed(tmp, **d)
-    os.replace(tmp, f)          # atomic on the same filesystem
+    save_npz_atomic(f, **d)
     if i % 20 == 0 or i == len(todo):
         print(f"  {i}/{len(todo)}")
 print(f"done: {len(todo)} updated")

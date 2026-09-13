@@ -5,17 +5,28 @@ video helpers, MANO/face utilities, renderer selection, and shared constants.
 """
 from __future__ import annotations
 
-import json
 import os
 import pickle
 import subprocess
 from pathlib import Path
 
-import io
-
 import cv2
 import numpy as np
 import torch
+
+# One implementation each, in the installed package; scripts/ is not importable from there.
+try:
+    from vid2smplx.cli import atomic_write, ffprobe_field
+except ImportError as e:                # a stale editable install: scripts/ newer than the package
+    raise ImportError(
+        f"{e}\n\n"
+        "scripts/ and the installed `vid2smplx` package are out of step — the package is older "
+        "than these scripts.\n"
+        "Fix: reinstall it from the repo root, then re-run:\n"
+        "    pip install --no-deps -e .            # conda\n"
+        "    uv pip install --no-deps -e .         # --uv installs\n"
+        "Check which copy is being imported with:  python -c 'import vid2smplx;print(vid2smplx.__file__)'"
+    ) from e
 
 
 def seed_everything(seed: int) -> None:
@@ -25,8 +36,8 @@ def seed_everything(seed: int) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    # Deliberately NOT setting torch.backends.cudnn.deterministic/benchmark: they are
+    # process-wide perf flags, not RNG state, and cost up to 2.7x. See docs/benchmarks.md.
 
 
 # ponytail: every pipeline script imports utils, so this one hook seeds them all when `vid2smplx run --seed N`.
@@ -34,17 +45,16 @@ if os.environ.get("VID2SMPLX_SEED"):
     seed_everything(int(os.environ["VID2SMPLX_SEED"]))
 
 
-def torch_load_buffered(path: str | Path, **kwargs) -> dict:
-    """Load a PyTorch checkpoint via buffered read to avoid Lustre small-read latency.
+# ---------------------------------------------------------------------------
+# Atomic artifact writes
+# ---------------------------------------------------------------------------
+# SIGKILL (preemption, scancel) cannot be caught, so an in-place write leaves a partial
+# file at the final path -- where the reuse check then blesses it. See docs/usage.md.
 
-    Reads the entire file into RAM in one sequential read (fast on Lustre),
-    then deserializes from memory. 12x faster than torch.load under IO contention.
-    """
-    kwargs.setdefault("map_location", "cpu")
-    kwargs.setdefault("weights_only", False)
-    with open(path, "rb") as f:
-        buf = io.BytesIO(f.read())
-    return torch.load(buf, **kwargs)
+def save_npz_atomic(path: str | Path, compressed: bool = True, **arrays) -> Path:
+    """np.savez(_compressed) that a kill can never leave half-written at `path`."""
+    saver = np.savez_compressed if compressed else np.savez
+    return atomic_write(path, ".npz", lambda tmp: saver(tmp, **arrays))
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -206,16 +216,27 @@ def smooth_face_params(expr: np.ndarray, jaw: np.ndarray, eyes: np.ndarray, fps:
 # ---------------------------------------------------------------------------
 
 def get_video_fps(video_path: Path | str) -> float:
-    """Get video FPS via ffprobe."""
-    result = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0",
-         "-show_entries", "stream=r_frame_rate", "-of", "json", str(video_path)],
-        capture_output=True, text=True,
-    )
-    info = json.loads(result.stdout)
-    fps_str = info["streams"][0]["r_frame_rate"]
-    num, den = fps_str.split("/")
-    return float(num) / float(den)
+    """Frame rate of `video_path`. Falls back to nb_frames/duration when r_frame_rate is absent."""
+    video_path = str(video_path)
+    rate = ffprobe_field(video_path, "r_frame_rate")
+    try:
+        num, den = rate.split("/")
+        fps = float(num) / float(den)
+        if fps > 0:
+            return fps
+    except (ValueError, ZeroDivisionError):
+        pass
+    try:                                    # some containers carry no r_frame_rate at all
+        n = float(ffprobe_field(video_path, "nb_frames"))
+        seconds = float(ffprobe_field(video_path, "duration", stream=False))
+        if n > 0 and seconds > 0:
+            return n / seconds
+    except (ValueError, ZeroDivisionError):
+        pass
+    raise RuntimeError(
+        f"Cannot read a frame rate from {video_path} (ffprobe reported r_frame_rate={rate!r} and "
+        f"no usable nb_frames/duration). Run `ffprobe {video_path}` to see what the file is; "
+        f"re-encoding it with `ffmpeg -i {video_path} -c:v libx264 fixed.mp4` normally fixes it.")
 
 
 def ensure_max_resolution(video_path: Path | str, max_res: int = MAX_RESOLUTION) -> str:
@@ -228,14 +249,12 @@ def ensure_max_resolution(video_path: Path | str, max_res: int = MAX_RESOLUTION)
         from hmr4d.utils.video_io_utils import get_video_lwh
         _, width, height = get_video_lwh(video_path)
     except ImportError:
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height", "-of", "json", video_path],
-            capture_output=True, text=True,
-        )
-        info = json.loads(result.stdout)
-        width = info["streams"][0]["width"]
-        height = info["streams"][0]["height"]
+        w, h = ffprobe_field(video_path, "width"), ffprobe_field(video_path, "height")
+        if not (w.isdigit() and h.isdigit()):
+            raise RuntimeError(
+                f"{video_path} reports no frame size (ffprobe gave {w!r}x{h!r}) — the file is "
+                f"corrupt or not a video. Run `ffprobe {video_path}` to see what it is.") from None
+        width, height = int(w), int(h)
 
     longer = max(width, height)
     if longer <= max_res:
@@ -311,36 +330,13 @@ def expand_bbox(bbox: list[float], scale: float = 1.3) -> list[float]:
 
 def auto_emica_batch_size(model: torch.nn.Module, sample_image: torch.Tensor, target_util: float = 0.85) -> int:
     """Probe GPU memory to find optimal EMICA batch size."""
-    device = torch.device("cuda")
-    torch.cuda.empty_cache()
-    torch.cuda.reset_peak_memory_stats(device)
+    from hmr4d.utils.auto_batch import auto_batch_size
 
-    # Probe with bs=1 to get fixed overhead
-    batch = {"image": sample_image.unsqueeze(0).cuda()}
-    with torch.no_grad():
-        _ = model(batch, training=False, validation=False)
-    peak1 = torch.cuda.max_memory_allocated(device)
-    del batch, _
-    torch.cuda.empty_cache()
-    torch.cuda.reset_peak_memory_stats(device)
-
-    # Probe with bs=4 to get marginal cost
-    test_bs = 4
-    batch = {"image": sample_image.unsqueeze(0).expand(test_bs, -1, -1, -1).cuda()}
-    with torch.no_grad():
-        _ = model(batch, training=False, validation=False)
-    peak4 = torch.cuda.max_memory_allocated(device)
-    per_sample = (peak4 - peak1) / (test_bs - 1)
-    del batch, _
-    torch.cuda.empty_cache()
-
-    total = torch.cuda.get_device_properties(device).total_memory
-    available = total * target_util - peak1
-    optimal = max(1, min(512, int(available / max(per_sample, 1))))
-    if total < 12e9:
-        optimal = max(1, optimal // 2)
-    print(f"  [Auto BS] EMICA: {total/1e9:.1f}GB GPU, {per_sample/1e6:.0f}MB/sample -> bs={optimal}")
-    return optimal
+    sample = sample_image.unsqueeze(0).cuda()
+    return auto_batch_size(
+        lambda n: model({"image": sample.expand(n, -1, -1, -1)}, training=False, validation=False),
+        label="EMICA", cap=512, device=torch.device("cuda"), target_util=target_util,
+    )
 
 
 # ---------------------------------------------------------------------------
