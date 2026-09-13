@@ -32,8 +32,12 @@ import ast
 mod = ast.parse(open('$REPO_DIR/vid2smplx/checks.py').read())
 for n in mod.body:
     if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') == 'MODELS':
-        for e in ast.literal_eval(n.value):
-            print(e[1], e[3])
+        # Per-ELEMENT literal_eval, never the whole tuple: the note field is a
+        # module constant (DOWNLOADABLE), i.e. an ast.Name, and literal_eval raises
+        # on any non-literal in the tree. Only fields 1 (path) and 3 (min_bytes)
+        # are needed here and both are always literals.
+        for e in n.value.elts:
+            print(ast.literal_eval(e.elts[1]), ast.literal_eval(e.elts[3]))
 ")"
 
 min_bytes_for() {   # absolute path -> its floor, or 1 (any non-empty file) when untabulated
