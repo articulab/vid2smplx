@@ -118,12 +118,24 @@ def rotmat_to_axis_angle(rotmat: np.ndarray) -> np.ndarray:
     theta = np.arccos(np.clip((np.trace(rotmat) - 1) / 2, -1, 1))
     if theta < 1e-6:
         return np.zeros(3, dtype=np.float32)
-    axis = np.array([
+    skew = np.array([
         rotmat[2, 1] - rotmat[1, 2],
         rotmat[0, 2] - rotmat[2, 0],
         rotmat[1, 0] - rotmat[0, 1],
     ])
-    axis = axis / (2 * np.sin(theta))
+    if theta > np.pi - 1e-4:
+        # Near a half turn both `skew` and sin(theta) vanish, so Rodrigues' 0/0 gives nan.
+        # There (R + I)/2 -> outer(axis, axis), which is well conditioned: read the axis off
+        # its largest diagonal entry and take the sign from the (tiny but still signed) skew
+        # part. Standard near-pi branch, cf. Shepperd 1978 / Hartley & Zisserman A4.3.
+        b = (rotmat + rotmat.T + 2 * np.eye(3)) / 4  # symmetrised: drops the O(pi-theta) skew term
+        k = int(np.argmax(np.diag(b)))
+        axis = b[:, k] / np.sqrt(max(b[k, k], 0.0))
+        axis = axis / np.linalg.norm(axis)
+        if skew @ axis < 0:
+            axis = -axis
+    else:
+        axis = skew / (2 * np.sin(theta))
     return (axis * theta).astype(np.float32)
 
 

@@ -291,6 +291,64 @@ def validate_wrist_targets(hands_incam_dc: dict[int, list[dict]],
 # IK solver
 # ---------------------------------------------------------------------------
 
+def _bad_frames(values: torch.Tensor, frame_ids: torch.Tensor) -> list[int]:
+    """Original frame indices whose slice of `values` holds a nan or an inf."""
+    flat = values.reshape(values.shape[0], -1)
+    bad = (~torch.isfinite(flat)).any(dim=1)
+    return frame_ids[bad.cpu()].tolist()
+
+
+def assert_targets_finite(rt_l: torch.Tensor, rt_r: torch.Tensor,
+                          rw_l: torch.Tensor, rw_r: torch.Tensor,
+                          body_orig: torch.Tensor, frame_ids: torch.Tensor) -> None:
+    """Refuse to start the solve on non-finite targets, naming the frames.
+
+    A nan in ONE target frame does not stay there: it poisons ring_loss -> backward() ->
+    Adam's moment buffers, so that frame never recovers, and the temporal smoothness term
+    couples neighbours, spreading the nan one frame further per step until the whole
+    sequence is nan — whole-sequence corruption reported as a successful run. Dropping the
+    frames instead would hide an upstream defect and still count them in coverage, so this
+    fails loudly.
+    """
+    ml, mr = rw_l.reshape(-1) > 0, rw_r.reshape(-1) > 0
+    bad = sorted(set(_bad_frames(rt_l[ml], frame_ids[ml])
+                     + _bad_frames(rt_r[mr], frame_ids[mr])
+                     + _bad_frames(body_orig, frame_ids)))
+    if bad:
+        raise RuntimeError(
+            f"[IK] {len(bad)} frame(s) carry non-finite IK targets or body pose; "
+            f"first offenders (frame index): {bad[:10]}. This normally means a degenerate "
+            f"HaMeR hand reached the hand cache (a nan in the fitted MANO mesh, or a "
+            f"near-half-turn wrist rotation). Delete hamer_hands.pt in the output directory "
+            f"and re-run so the hands stage rebuilds it, or re-run with --no-hands to skip "
+            f"hand IK; solving on these frames would corrupt the WHOLE sequence, not just "
+            f"the listed frames."
+        )
+
+
+def save_ik_npz(npz_path: Path, save_data: dict) -> None:
+    """Write the IK result — but never a non-finite one.
+
+    `ik_wrist_loss` is what marks a file as IK'd (scripts/render.py keys off its presence),
+    so a nan solve written here reads downstream as a valid IK result forever.
+    """
+    body_pose = np.asarray(save_data["body_pose"])
+    loss = np.asarray(save_data["ik_wrist_loss"])
+    bad = sorted(set(
+        np.flatnonzero(~np.isfinite(body_pose).all(axis=tuple(range(1, body_pose.ndim)))).tolist()
+        + np.flatnonzero(~np.isfinite(loss)).tolist()
+    ))
+    if bad:
+        raise RuntimeError(
+            f"[IK] refusing to save: {len(bad)} solved frame(s) are non-finite, first "
+            f"offenders (frame index): {bad[:10]}. Nothing was written to {npz_path}, so an "
+            f"existing file is left intact. Re-run the hands stage for this clip (delete "
+            f"hamer_hands.pt in the output directory) or re-run with --no-hands; writing "
+            f"this would make every downstream stage read nan as a valid IK result."
+        )
+    save_npz_atomic(npz_path, compressed=False, **save_data)
+
+
 def solve_ik(model: torch.nn.Module, smplx_params: dict[str, torch.Tensor],
              ring_target_l: torch.Tensor, ring_target_r: torch.Tensor,
              ring_w_l: torch.Tensor, ring_w_r: torch.Tensor,
@@ -350,6 +408,8 @@ def solve_ik(model: torch.nn.Module, smplx_params: dict[str, torch.Tensor],
 
     rt_l, rt_r = ring_target_l[idx], ring_target_r[idx]
     rw_l, rw_r = ring_w_l[idx], ring_w_r[idx]
+
+    assert_targets_finite(rt_l, rt_r, rw_l, rw_r, body_orig, idx)
 
     if collision_weight > 0 and coll_src is not None:
         from pytorch3d.ops import knn_points
@@ -434,7 +494,16 @@ def solve_ik(model: torch.nn.Module, smplx_params: dict[str, torch.Tensor],
         optimizer.step()
 
         if step % 50 == 0 or step == num_iters - 1:
-            print(f"    Step {step}: ring={total_ring.item():.6f} "
+            ring_val = total_ring.item()
+            # Fail here, not after burning the remaining iterations on a dead solve.
+            if not np.isfinite(ring_val):
+                raise RuntimeError(
+                    f"[IK] the solve went non-finite at step {step} (ring loss is nan/inf). "
+                    f"The targets were finite on entry, so this is a diverging optimisation: "
+                    f"retry with a lower --lr (currently {lr}), and check the hand meshes "
+                    f"for this clip."
+                )
+            print(f"    Step {step}: ring={ring_val:.6f} "
                   f"coll={total_coll.item():.4f} reg={reg.item():.4f} temporal={temporal.item():.4f}")
 
     # Write back optimized arm joints
@@ -672,7 +741,7 @@ def main() -> None:
     save_data["ik_coverage"] = np.float32(ik_coverage)
     save_data["ik_n_targets"] = np.int64(n_targets)
 
-    save_npz_atomic(npz_path, compressed=False, **save_data)
+    save_ik_npz(npz_path, save_data)
     print(f"  [IK] Saved → {npz_path}")
     print("  [IK] Done!")
 
