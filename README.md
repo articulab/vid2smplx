@@ -1,6 +1,6 @@
 # vid2smplx
 
-**Extract full-body SMPL-X parameters from monocular video: body, hands, face, gaze, and blink in a single pipeline.**
+**Extract full-body SMPL-X parameters from monocular video: body, hands and face in a single pipeline — plus experimental, opt-in gaze and blink (`--gaze`).**
 
 <p align="center">
   <img src="assets/hero.gif" alt="vid2smplx output vs original video" width="720"/>
@@ -8,15 +8,15 @@
 
 ## Why vid2smplx?
 
-Most video-to-3D methods either recover body pose alone (no hands, no face) or output a single mesh with no way to separately control fingers, jaw, or gaze. [SMPLest-X](https://github.com/sangho-vision/SMPLest-X) is a recent single-model approach that regresses SMPL-X directly, but produces a monolithic mesh without disentangled hand or face articulation.
+Most video-to-3D methods recover body pose alone, or output a single mesh with no way to control fingers, jaw or gaze separately — including [SMPLest-X](https://github.com/sangho-vision/SMPLest-X), which regresses SMPL-X directly but as a monolithic mesh.
 
-vid2smplx runs five specialized models in sequence and merges their outputs into a single SMPL-X parameter file with separate, editable channels for body, hands, face, gaze, and blink.
+vid2smplx runs specialized models in sequence and merges them into one SMPL-X parameter file with separate, editable channels for body, hands and face, plus gaze and blink behind `--gaze` (experimental — see [Known limitations](#known-limitations)).
 
 ## Pipeline
 
 ```
-Video --> GVHMR --> HaMeR --> EMICA --> L2CS-Net --> MediaPipe --> Merge --> IK --> smplx_params.npz
-           body     hands     face      gaze         blink                 wrists
+Video --> GVHMR --> HaMeR --> EMICA --> [L2CS-Net --> MediaPipe] --> Merge --> IK --> smplx_params.npz
+           body     hands     face    gaze        blink  (--gaze)              wrists
 ```
 
 Each step caches its output. Rerunning skips completed steps.
@@ -31,8 +31,7 @@ A single `.npz` per video:
 | `global_orient` | (T, 3) | GVHMR, root orientation |
 | `transl` | (T, 3) | GVHMR, global translation |
 | `betas` | (T, 10) | GVHMR, body shape |
-| `left_hand_pose` | (T, 45) | HaMeR, 15 hand joints in axis-angle |
-| `right_hand_pose` | (T, 45) | HaMeR, 15 hand joints in axis-angle |
+| `left_hand_pose` / `right_hand_pose` | (T, 45) | HaMeR, 15 joints each in axis-angle (IK-corrected wrists) |
 | `jaw_pose` | (T, 3) | EMICA, jaw rotation |
 | `expression` | (T, 100) | EMICA, FLAME 2020 expression coefficients |
 | `leye_pose` / `reye_pose` | (T, 3) | EMICA, eye rotations |
@@ -46,29 +45,28 @@ A single `.npz` per video:
 | `coord_system` | string | `"global"` (world-space) |
 | `fps` | scalar | frame rate of the source video |
 
-Gaze and blink are opt-in: pass `--gaze` to run them. They are experimental — see [Known limitations](#known-limitations).
-
 No stage resamples: outputs keep the source video's frame rate, which is stored in `fps`. Frame index alone is not a time base — this corpus mixes 25 and 29.97.
 
 ## Quickstart
 
 ```bash
-git clone git@github.com:articulab/vid2smplx.git    # private: SSH, and NOT --recursive
+git clone git@github.com:articulab/vid2smplx.git   # private repo: SSH. NOT --recursive
 cd vid2smplx
-bash install.sh                 # conda env + deps + ~16 GB of weights, ends with `vid2smplx doctor`  (or: --uv)
-# doctor will ask for SMPL-X and MANO (free registration) -> see docs/models.md
+bash install.sh                 # env + deps + ~16 GB of weights, ends with `vid2smplx doctor`  (or: --uv)
+# doctor asks for SMPL-X and MANO (free registration) -> docs/models.md
 conda activate vid2smplx
 vid2smplx run examples/clip_talking.mp4 --final-incam
 ```
 
-Result: `output/clip_talking/smplx_params.npz` + `render/final_incam.mp4`.
+Result: `output/clip_talking/smplx_params.npz` + `render/final_incam.mp4`. Details:
+[docs/install.md](docs/install.md).
 
-Needs Linux, conda or uv, ~23 GB disk, and an NVIDIA GPU: **8 GB** covers everything measured up to 12,526 frames (~8 min at 25 fps), **~16 GB** beyond that. Peak VRAM follows the card, not the clip (measured 5.1 GB on an 8 GB card, 12.3 GB on a 46 GB one, same clip) — see [benchmarks](docs/benchmarks.md). Blackwell GPUs: see [docs/install.md](docs/install.md#blackwell-gpus-rtx-50xx-rtx-pro-sm_120).
+Needs Linux, conda or uv, ~23 GB disk, and an NVIDIA GPU: **8 GB** up to 12,526 frames (~8 min at 25 fps), **~16 GB** beyond that — peak follows the card, not the clip ([benchmarks](docs/benchmarks.md)). Blackwell GPUs: [docs/install.md](docs/install.md#blackwell-gpus-rtx-50xx-rtx-pro-sm_120).
 
 ## Commands
 
 ```
-vid2smplx run <video.mp4> [--final-incam] [--full-debug] [--no-face] [--no-hands] [--percent N] [--cleanup]
+vid2smplx run <video.mp4> [--final-incam] [--full-debug] [--no-face] [--no-hands] [--gaze] [--percent N] [--cleanup]
 vid2smplx render <output/clip> --layers final,global,hands,face
 vid2smplx doctor                 # env, weights, symlinks, submodule patches -> [OK]/[MISS] table
 vid2smplx setup                  # verify GVHMR is at the pinned fork commit (install.sh does this)
@@ -79,35 +77,33 @@ Every step caches, so rerunning a clip resumes where it stopped. Full option lis
 
 ## Docs
 
-- [Install](docs/install.md) — requirements, conda or uv, Blackwell, troubleshooting, tests
-- [Usage](docs/usage.md) — all flags, output tree, loading the npz in Python
-- [Models](docs/models.md) — every weight file, where it goes, which need registration
-- [Pipeline](docs/pipeline.md) — what each step does and which script runs it
-- [Benchmarks](docs/benchmarks.md) — per-stage time, VRAM and GPU utilization; what hardware you need
+- [Install](docs/install.md) — conda or uv, Blackwell, troubleshooting, tests
+- [Usage](docs/usage.md) — all flags, output tree, loading the npz
+- [Models](docs/models.md) — every weight file and which need registration
+- [Pipeline](docs/pipeline.md) — each step and the script that runs it
+- [Benchmarks](docs/benchmarks.md) — time, VRAM, and what hardware you need
 - [Comparison with SMPLest-X](docs/comparison.md) — GIFs and timings
-- [cleps cluster](docs/CLEPS_SETUP.md) — bringup and SLURM arrays on the Inria cleps cluster
 
 ## Known limitations
 
 What these mean for the numbers in your `smplx_params.npz`:
 
-- **Eye pose is a proxy, not a measurement.** `leye_pose` / `reye_pose` are a normalised
-  2-D iris offset scaled by a fixed constant and written into a slot SMPL-X reads as
-  axis-angle radians (`scripts/run_emica.py`). Nothing calibrates that scale, so the
-  magnitudes are not in radians in any meaningful sense. This is why gaze and blink are
-  opt-in (`--gaze`) and why the default run leaves these channels at zero.
-- **Blink validity follows the face box, not the landmarks.** `gaze_blink.npz` marks a
-  frame valid when a face bounding box exists, even when MediaPipe found no eye landmarks
-  in it (`scripts/run_gaze_blink.py`). Such frames carry `blink_left`/`blink_right` of
-  exactly `0.0`, which is indistinguishable from a fully closed eye. Treat an exact `0.0`
-  as missing, not as a blink.
-- **One person per video.** The npz holds exactly one body, and one left and one right
-  hand per frame; with several people in frame the extra hand detections overwrite each
-  other (`scripts/merge_body_hands.py`), while the debug overlay renders all of them. A
-  video where the overlay shows more hands than one person has is a video whose npz you
-  should not trust. `run` refuses a multi-person clip unless you pass `--person N`.
-- **IK output is not checked for finiteness.** `scripts/ik_hands.py` writes its solved
-  poses straight to the npz; if the solve diverges, `NaN` reaches the file. Check
+- **Eye pose is a proxy, not a measurement.** `leye_pose` / `reye_pose` are a normalised 2-D
+  iris offset scaled by a fixed constant, written into a slot SMPL-X reads as axis-angle
+  radians (`scripts/run_emica.py`). Nothing calibrates that scale, so the magnitudes are not
+  radians in any meaningful sense. Hence gaze and blink are opt-in (`--gaze`), and the default
+  run leaves these channels at zero.
+- **Blink validity follows the face box, not the landmarks.** `gaze_blink.npz` marks a frame
+  valid when a face bbox exists, even when MediaPipe found no eye landmarks in it
+  (`scripts/run_gaze_blink.py`). Those frames carry `blink_left`/`blink_right` of exactly
+  `0.0`, indistinguishable from a closed eye. Treat an exact `0.0` as missing, not a blink.
+- **One person per video.** The npz holds one body and one left/right hand per frame; with
+  several people in frame the extra hand detections overwrite each other
+  (`scripts/merge_body_hands.py`) while the debug overlay renders all of them. If the overlay
+  shows more hands than one person has, do not trust the npz. `run` refuses a multi-person
+  clip unless you pass `--person N`.
+- **IK output is not checked for finiteness.** `scripts/ik_hands.py` writes solved poses
+  straight to the npz; a diverged solve puts `NaN` in the file. Check
   `np.isfinite(d["body_pose"]).all()` before using a result.
 
 ## Models and citations

@@ -1,7 +1,7 @@
 # Comparison with SMPLest-X
 
 
-We compared vid2smplx with [SMPLest-X](https://github.com/sangho-vision/SMPLest-X) on CC0-licensed clips (Quadro RTX 8000, 46GB). SMPLest-X is faster but outputs a single mesh without separate hand or face control. vid2smplx is slower but gives you independent parameters for each body part.
+vid2smplx vs [SMPLest-X](https://github.com/sangho-vision/SMPLest-X) on CC0 clips (Quadro RTX 8000, 46 GB). SMPLest-X is faster but outputs a single mesh with no separate hand or face control; vid2smplx is slower and gives independent parameters per body part.
 
 Each GIF shows **vid2smplx | Original | SMPLest-X**.
 
@@ -60,6 +60,9 @@ vid2smplx captures jaw opening and mouth shapes via EMICA/FLAME. SMPLest-X keeps
 | **SMPLest-X total** | **326s** | **486s** | **617s** |
 
 The signing clip shows the largest gap because HaMeR processes many more hand detections per frame.
+These are whole-pipeline totals from an earlier configuration, with gaze/blink included; gaze is now
+opt-in (`--gaze`), so a default run drops that row. Current per-stage timings, measured
+2026-09-13 on the same card, are in [benchmarks.md](benchmarks.md#stage-timings) and are faster.
 
 </details>
 

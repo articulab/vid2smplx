@@ -17,9 +17,8 @@
 
 Registration is free for research use.
 
-**Size (measured, `du -sh`):** ~15 GB of weights inside the repo, plus 1.4 GB that insightface
-puts in `~/.insightface` — **~16 GB of weights**. The complete install, including the Python
-environment and submodule sources, is ~23 GB; see [install.md](install.md).
+**Size (measured):** ~15 GB in the repo + 1.4 GB in `~/.insightface` = **~16 GB of weights**;
+~23 GB for the complete install ([install.md](install.md)).
 
 ## Symlinks
 
