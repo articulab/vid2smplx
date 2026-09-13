@@ -88,6 +88,23 @@ def run(cmd: list[str], cwd: str | None = None, check: bool = True) -> subproces
     return subprocess.CompletedProcess(cmd, proc.returncode, stdout="".join(lines), stderr=stderr)
 
 
+def ff_bin(name: str) -> str:
+    """Absolute path to a vendored ffmpeg/ffprobe, or the bare name for PATH lookup.
+
+    doctor accepts a binary sitting beside sys.executable, because install.sh vendors
+    static-ffmpeg into <env>/bin and never activates the env. The CLI used the bare name
+    and so resolved through PATH only -- meaning `doctor` said "All checks passed" while
+    `run` died with FileNotFoundError: 'ffprobe' whenever the entrypoint was invoked by
+    absolute path (a SLURM script, a cron line, any venv that is not activated). Resolve
+    it the same way doctor validates it.
+    """
+    found = shutil.which(name)
+    if found:
+        return found
+    sibling = os.path.join(os.path.dirname(sys.executable), name)
+    return sibling if os.access(sibling, os.X_OK) else name
+
+
 def capture(cmd: list[str], cwd: str | None = None) -> subprocess.CompletedProcess[str]:
     """Run a short command in the env, capturing both streams. Never streams to the terminal.
 
@@ -187,7 +204,7 @@ def ffprobe_field(video: str, field: str, stream: bool = True) -> str:
     """Get a single stream (or, with stream=False, container) field from a video. '' when absent."""
     select = ["-select_streams", "v:0"] if stream else []
     result = capture(
-        ["ffprobe", "-v", "error", *select,
+        [ff_bin("ffprobe"), "-v", "error", *select,
          "-show_entries", f"{'stream' if stream else 'format'}={field}", "-of", "csv=p=0", video],
     )
     val = result.stdout.strip().split("\n")[0].strip() if result.stdout.strip() else ""
@@ -258,7 +275,7 @@ def probe_video(path: str) -> str:
     # Decode every frame -- `-frames:v 1` misses it, the first frame of a truncated file
     # is intact. Video only, no encode: ~40x realtime (0.4s for a 15s 1080p clip).
     # ffmpeg still exits 0 on a decode error, so the stderr text is the signal.
-    dec = capture(["ffmpeg", "-v", "error", "-i", path, "-map", "0:v:0", "-f", "null", "-"])
+    dec = capture([ff_bin("ffmpeg"), "-v", "error", "-i", path, "-map", "0:v:0", "-f", "null", "-"])
     if dec.returncode != 0 or dec.stderr.strip():
         detail = (dec.stderr.strip().splitlines() or ["no detail"])[-1][:160]
         return (f"{path} has valid metadata but its frames cannot be decoded ({detail}) — the file is "
@@ -1019,7 +1036,7 @@ def _run_stages(args, output_dir: Path, timer: Timer) -> None:
         trimmed = trim_dir / f"{video_name}_{args.percent}pct.mp4"
         if not trimmed.exists():
             print(f"[Trim] Cutting first {args.percent}% ({target_duration}s of {duration}s)...")
-        ffmpeg_cached(trimmed, lambda dst: ["ffmpeg", "-y", "-i", str(video), "-t", target_duration,
+        ffmpeg_cached(trimmed, lambda dst: [ff_bin("ffmpeg"), "-y", "-i", str(video), "-t", target_duration,
                                             "-c", "copy", dst, "-loglevel", "warning"],
                       key={"src": source_id, "percent": args.percent}, label="trim")
         video = trimmed
@@ -1037,7 +1054,7 @@ def _run_stages(args, output_dir: Path, timer: Timer) -> None:
             if not downscaled.exists():
                 print(f"[Downscale] {width}x{height} -> 1080p...")
             ffmpeg_cached(downscaled, key={"src": video_identity(video)}, label="downscale", cmd_for=lambda dst: [
-                "ffmpeg", "-y", "-i", str(video),
+                ff_bin("ffmpeg"), "-y", "-i", str(video),
                 "-vf", "scale='if(gt(iw,ih),1920,-2)':'if(gt(iw,ih),-2,1920)'",
                 "-c:v", "libx264", "-crf", "18", "-preset", "fast",
                 "-pix_fmt", "yuv420p", dst, "-loglevel", "warning",

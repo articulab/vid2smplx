@@ -43,3 +43,33 @@ def test_the_downloader_still_reads_the_fields_it_thinks_it_does():
     assert idx == ["1", "3"], f"downloader now reads fields {idx}; update this test and the table contract"
     width = {len(e.elts) for e in _models_node().elts}
     assert width == {4}, f"MODELS rows are {width}-wide; the downloader indexes 1 and 3"
+
+
+# --- ffmpeg/ffprobe resolution ---------------------------------------------------------------
+# doctor accepts a binary beside sys.executable (install.sh vendors static-ffmpeg into <env>/bin
+# and never activates the env), but the CLI called the bare name and resolved through PATH alone.
+# Result: "All checks passed" followed by FileNotFoundError: 'ffprobe' on the very next command,
+# whenever the entrypoint was run by absolute path instead of through an activated venv.
+def test_ff_bin_finds_a_vendored_binary_that_is_not_on_path(tmp_path, monkeypatch):
+    import sys as _sys
+    from vid2smplx.cli import ff_bin
+
+    fake_env = tmp_path / "bin"
+    fake_env.mkdir()
+    vendored = fake_env / "ffprobe"
+    vendored.write_text("#!/bin/sh\nexit 0\n")
+    vendored.chmod(0o755)
+
+    monkeypatch.setattr(_sys, "executable", str(fake_env / "python"))
+    monkeypatch.setenv("PATH", str(tmp_path / "nothing-here"))   # definitively not on PATH
+
+    assert ff_bin("ffprobe") == str(vendored), "a vendored binary beside the interpreter was not found"
+
+
+def test_ff_bin_falls_back_to_the_bare_name_so_the_error_stays_recognisable(tmp_path, monkeypatch):
+    import sys as _sys
+    from vid2smplx.cli import ff_bin
+
+    monkeypatch.setattr(_sys, "executable", str(tmp_path / "bin" / "python"))
+    monkeypatch.setenv("PATH", str(tmp_path / "nothing-here"))
+    assert ff_bin("ffprobe") == "ffprobe"
