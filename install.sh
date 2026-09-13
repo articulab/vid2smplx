@@ -289,10 +289,14 @@ if ! command -v ffmpeg &>/dev/null || ! command -v ffprobe &>/dev/null; then
     # NOTE: use in_env, never a bare `python`: the env is never activated here, so
     # bare python is whatever conda auto-activated (base on cleps) and the links
     # would land in that SHARED env's bin.
-    read -r FF FP < <(in_env python -c "
+    # `read` alone takes the FIRST line, but a cold fetch prints four lines of
+    # "Downloading ... / Extracting ..." to STDOUT before the paths, so on any machine
+    # without the binaries already cached FF/FP captured progress text and vendoring
+    # "failed" -- while every machine that had them cached worked. Take the LAST line.
+    read -r FF FP <<<"$(in_env python -c "
 import static_ffmpeg.run as r
 a, b = r.get_or_fetch_platform_executables_else_raise()
-print(a, b)" 2>/dev/null) || true
+print(a, b)" 2>/dev/null | tail -n 1)" || true
     BIN=$(dirname "$(in_env python -c "import sys;sys.stdout.write(sys.executable)")")
     if [ -x "$FF" ] && [ -x "$FP" ]; then
         ln -sf "$FF" "$BIN/ffmpeg"; ln -sf "$FP" "$BIN/ffprobe"
