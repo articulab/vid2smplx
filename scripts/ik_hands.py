@@ -310,9 +310,12 @@ def assert_targets_finite(rt_l: torch.Tensor, rt_r: torch.Tensor,
     frames instead would hide an upstream defect and still count them in coverage, so this
     fails loudly.
     """
+    # The weights live on the solve device, frame_ids on the cpu. Index each with a mask
+    # from its OWN device: a cuda mask against a cpu tensor raises, which turned this guard
+    # into the crash it exists to prevent.
     ml, mr = rw_l.reshape(-1) > 0, rw_r.reshape(-1) > 0
-    bad = sorted(set(_bad_frames(rt_l[ml], frame_ids[ml])
-                     + _bad_frames(rt_r[mr], frame_ids[mr])
+    bad = sorted(set(_bad_frames(rt_l[ml], frame_ids[ml.cpu()])
+                     + _bad_frames(rt_r[mr], frame_ids[mr.cpu()])
                      + _bad_frames(body_orig, frame_ids)))
     if bad:
         raise RuntimeError(

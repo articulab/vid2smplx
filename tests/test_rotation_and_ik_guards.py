@@ -210,3 +210,49 @@ def test_matrix_to_axis_angle_represents_a_half_turn(diag, axis):
     # a half turn has magnitude pi about the one axis whose diagonal entry stayed +1
     assert abs(np.linalg.norm(got) - np.pi) < 1e-5, f"half turn collapsed to {got}"
     assert abs(abs(got[axis]) - np.pi) < 1e-5, f"half turn on the wrong axis: {got}"
+
+
+def test_target_guard_indexes_frame_ids_with_a_cpu_mask(monkeypatch):
+    """frame_ids lives on the cpu; the weight masks live on the solve device.
+
+    Indexing a cpu tensor with a cuda mask raises `RuntimeError: indices should be either
+    on cpu or on the same device as the indexed tensor`, so on a GPU box this guard crashed
+    instead of guarding and killed the IK stage on a healthy clip. There is no GPU here, so
+    assert the contract directly: every mask handed to frame_ids must be a cpu tensor.
+    """
+    import torch
+    assert_targets_finite = ik_hands.assert_targets_finite
+
+    T = 5
+    rt_l = torch.randn(T, 8, 3); rt_r = torch.randn(T, 8, 3)
+    rw_l = torch.ones(T, 1);     rw_r = torch.ones(T, 1)
+    body = torch.randn(T, 21, 3)
+    frame_ids = torch.arange(200, 200 + T)
+
+    seen = []
+    real_getitem = torch.Tensor.__getitem__
+
+    def recording_getitem(self, key):
+        if isinstance(key, torch.Tensor) and key.dtype == torch.bool:
+            seen.append(key.device.type)
+        return real_getitem(self, key)
+
+    monkeypatch.setattr(torch.Tensor, "__getitem__", recording_getitem)
+    assert_targets_finite(rt_l, rt_r, rw_l, rw_r, body, frame_ids)
+    monkeypatch.undo()
+
+    assert seen, "guard no longer masks by tensor; update this test"
+    assert set(seen) == {"cpu"}, f"a non-cpu mask reached an index: {set(seen)}"
+
+
+def test_target_guard_still_names_the_offending_frame():
+    import torch
+    assert_targets_finite = ik_hands.assert_targets_finite
+
+    T = 5
+    rt_l = torch.randn(T, 8, 3); rt_r = torch.randn(T, 8, 3)
+    rt_r[1, 0, 0] = float("inf")
+    rw_l = torch.ones(T, 1); rw_r = torch.ones(T, 1)
+    body = torch.randn(T, 21, 3)
+    with pytest.raises(RuntimeError, match="201"):        # original frame id, not the local index
+        assert_targets_finite(rt_l, rt_r, rw_l, rw_r, body, torch.arange(200, 200 + T))
