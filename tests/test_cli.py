@@ -737,11 +737,21 @@ def test_render_after_cleanup_says_how_to_recover(tmp_path):
     assert errs and "--video" in errs[0] and "--cleanup" in errs[0]
     assert str(d) in errs[0]                                   # a command they can paste
 
-    # with --video the source is solved, but 'final' still needs GVHMR's own result
+    # with --video, final renders from the npz alone
     vid = tmp_path / "v.mp4"; vid.write_bytes(b"x")
     a = build_parser().parse_args(["render", str(d), "--layers", "final", "--video", str(vid)])
     errs = []; validate_render_args(a, errs.append)
-    assert errs and "hmr4d_results.pt" in errs[0] and "--layers face,hands" in errs[0]
+    assert errs == []
+
+    # global uses fixed cameras: no video needed at all
+    a = build_parser().parse_args(["render", str(d), "--layers", "global"])
+    errs = []; validate_render_args(a, errs.append)
+    assert errs == []
+
+    # the raw GVHMR layer is gone for good, the npz holds only IK-corrected poses
+    a = build_parser().parse_args(["render", str(d), "--layers", "gvhmr", "--video", str(vid)])
+    errs = []; validate_render_args(a, errs.append)
+    assert errs and "hmr4d_results.pt" in errs[0]
 
     # a layer that needs neither is allowed through
     a = build_parser().parse_args(["render", str(d), "--layers", "hands", "--video", str(vid)])

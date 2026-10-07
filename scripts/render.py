@@ -144,28 +144,35 @@ def render_incam(video_path: str, verts: torch.Tensor, K: torch.Tensor, output_p
 # Global scene preparation
 # ---------------------------------------------------------------------------
 
-def prepare_global_scene(verts: torch.Tensor, hand_data: dict[int, list[dict]] | None, body_model_dir: Path | str | None = None) -> tuple[torch.Tensor, dict[int, list[dict]] | None, torch.Tensor]:
-    """Precompute scene normalization for global views."""
+def prepare_global_scene(verts: torch.Tensor, hand_data: dict[int, list[dict]] | None, body_model_dir: Path | str | None = None, chunk_size: int = 512) -> tuple[torch.Tensor, dict[int, list[dict]] | None, torch.Tensor]:
+    """Precompute scene normalization for global views.
+
+    Vertices stay in CPU RAM and go to the GPU chunk_size frames at a time, so VRAM does not
+    grow with clip length (a 25 min clip is ~4.4 GB of vertices).
+    """
     if body_model_dir is None:
         body_model_dir = Path("hmr4d/utils/body_model")
     body_model_dir = Path(body_model_dir)
     J_regressor = torch.load(body_model_dir / "smpl_neutral_J_regressor.pt").cuda()
     smplx2smpl = torch.load(body_model_dir / "smplx2smpl_sparse.pt").cuda()
-    smpl_verts = torch.stack([torch.matmul(smplx2smpl, v_) for v_ in verts.cuda()])
-    joints_for_cam = einsum(J_regressor, smpl_verts, "j v, l v i -> l j i")
 
-    offset = joints_for_cam[0, 0].clone()
-    offset[1] = verts.cuda()[:, :, 1].min()
+    def joints_of(v):
+        """SMPL joints of SMPL-X vertices (L, V, 3), on CPU."""
+        out = []
+        for c in v.split(chunk_size):
+            smpl_v = torch.stack([torch.matmul(smplx2smpl, vi) for vi in c.cuda()])
+            out.append(einsum(J_regressor, smpl_v, "j v, l v i -> l j i").cpu())
+        return torch.cat(out)
 
-    def move_to_start_point_face_z(v):
-        v = v.clone() - offset
-        smpl_v = torch.stack([torch.matmul(smplx2smpl, vi) for vi in v])
-        j = einsum(J_regressor, smpl_v, "j v, l v i -> l j i")
-        T_ay2ayfz = compute_T_ayfz2ay(j[[0]], inverse=True)
-        v = apply_T_on_points(v, T_ay2ayfz)
-        return v, T_ay2ayfz
+    verts = verts.cpu()
+    offset = joints_of(verts[:1])[0, 0].clone()
+    offset[1] = verts[:, :, 1].min()
+    # face the first frame along +z: only frame 0 decides the transform
+    T_ay2ayfz = compute_T_ayfz2ay(joints_of(verts[:1] - offset), inverse=True)
 
-    verts_scene, T_ay2ayfz = move_to_start_point_face_z(verts.cuda())
+    verts_scene = torch.empty_like(verts)
+    for i in range(0, len(verts), chunk_size):
+        verts_scene[i:i + chunk_size] = apply_T_on_points(verts[i:i + chunk_size] - offset, T_ay2ayfz)
 
     hands_scene = None
     if hand_data:
@@ -173,18 +180,14 @@ def prepare_global_scene(verts: torch.Tensor, hand_data: dict[int, list[dict]] |
         for frame_idx, dets in hand_data.items():
             hands_scene[frame_idx] = []
             for hd in dets:
-                hv = hd["verts"].cuda() - offset
-                hv_h = torch.cat([hv, torch.ones(hv.shape[0], 1, device=hv.device)], dim=1)
-                hv_transformed = (T_ay2ayfz[0] @ hv_h.T).T[:, :3]
+                hv = hd["verts"].cpu() - offset
+                hv_h = torch.cat([hv, torch.ones(hv.shape[0], 1)], dim=1)
                 hands_scene[frame_idx].append({
-                    "verts": hv_transformed,
+                    "verts": (T_ay2ayfz[0] @ hv_h.T).T[:, :3],
                     "is_right": hd["is_right"],
                 })
 
-    smpl_verts_scene = torch.stack([torch.matmul(smplx2smpl, v_) for v_ in verts_scene])
-    joints_scene = einsum(J_regressor, smpl_verts_scene, "j v, l v i -> l j i")
-
-    return verts_scene, hands_scene, joints_scene
+    return verts_scene, hands_scene, joints_of(verts_scene)
 
 
 # ---------------------------------------------------------------------------
@@ -288,13 +291,13 @@ def render_global_triview(verts_scene: torch.Tensor, output_dir: Path | str, fac
             for vi in range(n_views):
                 R, T, lights = cam_data[vi]
                 cameras = renderer.create_camera(R[i], T[i])
-                img = renderer.render_with_ground(verts_scene[[i]], body_color[None], cameras, lights)
+                img = renderer.render_with_ground(verts_scene[[i]].to("cuda"), body_color[None], cameras, lights)
 
                 if hands_scene and i in hands_scene:
                     cam_R = R[i].to("cuda").view(3, 3)
                     cam_T = T[i].to("cuda").view(3)
                     for hd in hands_scene[i]:
-                        hv = hd["verts"]
+                        hv = hd["verts"].to("cuda")
                         color = color_right_t if hd["is_right"] else color_left_t
                         hv_cam = (cam_R @ hv.T).T + cam_T
                         if hd["is_right"]:
@@ -478,9 +481,30 @@ def _resolve_smplx_dir(smplx_dir):
 
 
 
+def _pred_from_npz(smplx_params_npz):
+    """Stand-in for hmr4d_results.pt after `run --cleanup` deleted it.
+
+    smplx_params.npz keeps the camera and both coordinate frames, so final and global
+    render from it alone. Its poses are the IK-corrected ones, not GVHMR's raw output.
+    """
+    d = np.load(smplx_params_npz, allow_pickle=True)
+
+    def frame(suffix):
+        return {k: d[k + suffix] if k + suffix in d else d[k]
+                for k in ("body_pose", "global_orient", "betas", "transl")}
+
+    pred = {"smpl_params_incam": frame("_incam"), "K_fullimg": torch.from_numpy(d["K_fullimg"])}
+    if str(d["coord_system"]) == "global":
+        pred["smpl_params_global"] = frame("")
+    return pred
+
+
 def _load_gvhmr_and_model(gvhmr_result, smplx_dir, smplx_params_npz=None):
     """Load GVHMR prediction and create SMPL-X model. Returns (pred, model, faces, K, length)."""
-    pred = torch.load(gvhmr_result, map_location="cpu", weights_only=False)
+    if Path(gvhmr_result).exists():
+        pred = torch.load(gvhmr_result, map_location="cpu", weights_only=False)
+    else:
+        pred = _pred_from_npz(smplx_params_npz)
     incam = pred["smpl_params_incam"]
     length = len(incam["body_pose"])
 
@@ -597,14 +621,14 @@ def render_layers(clip_dir: Path | str, layers: set[str], smplx_dir: Path | str,
     if not gaze_result.exists():
         gaze_result = clip_dir / "gaze_blink.npz"
 
-    if not video.exists():
+    if not video.exists() and layers & {"gvhmr", "final", "hands", "face"}:
         print(f"ERROR: Video not found: {video}")
         sys.exit(1)
-    if not gvhmr_result.exists() and layers & {"gvhmr", "final", "global"}:
+    if not gvhmr_result.exists() and ("gvhmr" in layers or (layers & {"final", "global"} and not smplx_params_npz.exists())):
         print(f"ERROR: GVHMR result not found: {gvhmr_result}")
         sys.exit(1)
 
-    video_str = ensure_max_resolution(str(video))
+    video_str = ensure_max_resolution(str(video)) if video.exists() else None
 
     print(f"=== Rendering layers: {', '.join(sorted(layers))} ===")
     print(f"Clip:  {clip_name}")
@@ -629,6 +653,8 @@ def render_layers(clip_dir: Path | str, layers: set[str], smplx_dir: Path | str,
             print(f"[SKIP] {out}")
         elif not emica_result.exists():
             print("[SKIP] face — no EMICA params")
+        elif not gvhmr_result.exists():
+            print("[SKIP] face — needs gvhmr/, which --cleanup deleted")
         else:
             print("=== Rendering: face_incam ===")
             render_face_incam(video_str, str(emica_result), str(gvhmr_result), str(out))
@@ -697,7 +723,7 @@ def render_layers(clip_dir: Path | str, layers: set[str], smplx_dir: Path | str,
                 global_params = _build_gvhmr_params(pred, "global", length, face_params)
                 verts_g, _ = smplx_forward_chunked(model, global_params)
 
-            length_w, width, height = get_video_lwh(video_str)
+            width, height = get_video_lwh(video_str)[1:] if video_str else (1280, 720)
             body_model_dir = _get_repo_dir() / "GVHMR" / "hmr4d" / "utils" / "body_model"
             verts_scene, _, joints_scene = prepare_global_scene(verts_g, None, body_model_dir=body_model_dir)
             render_global_triview(verts_scene, str(render_dir), smplx_faces,

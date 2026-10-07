@@ -742,32 +742,29 @@ def validate_render_args(args, error) -> None:
         error(f"--video not found: {args.video}")
 
 
-# Layers that reproject the body and therefore need GVHMR's own result file.
-_LAYERS_NEEDING_GVHMR = {"gvhmr", "final", "global"}
+# Layers drawn over the source video; global uses fixed cameras and needs none.
+_LAYERS_ON_VIDEO = {"gvhmr", "final", "hands", "face"}
 
 
 def _render_inputs_ok(clip: Path, args, error) -> bool:
-    """`run --cleanup` deletes gvhmr/, so `render` on that dir was a dead end.
+    """`run --cleanup` deletes gvhmr/ and leaves smplx_params.npz.
 
-    validate_render_args accepted the dir (smplx_params.npz is there), then render.py died
-    with a bare `ERROR: Video not found:` naming a path inside the directory --cleanup had
-    just removed, and never mentioned --video, the one flag that makes it work.
+    final and global render from the npz alone (render.py falls back to it). Only the raw
+    gvhmr layer needs GVHMR's own file, and only the overlay layers need the video.
     """
     gv = clip / "gvhmr" / clip.name
     layers = set(args.layers.split(","))
-    if not args.video and not (gv / "0_input_video.mp4").exists():
-        error(f"{clip} has no source video: {gv / '0_input_video.mp4'} is missing "
-              f"(`vid2smplx run --cleanup` deletes gvhmr/). Re-render by pointing at the "
-              f"original video:\n"
-              f"  vid2smplx render {clip} --layers {args.layers} --video <your video.mp4>")
+    if "gvhmr" in layers and not (gv / "hmr4d_results.pt").exists():
+        error(f"layer gvhmr is GVHMR's raw body and needs {gv / 'hmr4d_results.pt'}, which is "
+              f"missing (`vid2smplx run --cleanup` deletes gvhmr/). final and global render "
+              f"from smplx_params.npz alone.")
         return False
-    need = sorted(layers & _LAYERS_NEEDING_GVHMR)
-    if need and not (gv / "hmr4d_results.pt").exists():
-        keep = sorted(set(VALID_LAYERS) - _LAYERS_NEEDING_GVHMR)
-        error(f"layer(s) {','.join(need)} need {gv / 'hmr4d_results.pt'}, which is missing "
-              f"(`vid2smplx run --cleanup` deletes gvhmr/). Either re-run the pipeline without "
-              f"--cleanup, or render only the layers that do not need it: --layers "
-              f"{','.join(keep)}")
+    if layers & _LAYERS_ON_VIDEO and not args.video and not (gv / "0_input_video.mp4").exists():
+        error(f"{clip} has no source video: {gv / '0_input_video.mp4'} is missing "
+              f"(`vid2smplx run --cleanup` deletes gvhmr/). Point at the original video:\n"
+              f"  vid2smplx render {clip} --layers {args.layers} --video <your video.mp4>\n"
+              f"or render the 3D views only, no video needed:\n"
+              f"  vid2smplx render {clip} --layers global")
         return False
     return True
 
