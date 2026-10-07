@@ -68,6 +68,7 @@ Needs Linux, conda or uv, ~23 GB disk, and an NVIDIA GPU: **8 GB** up to 12,526 
 ```
 vid2smplx run <video.mp4> [--final-incam] [--full-debug] [--no-face] [--no-hands] [--gaze] [--percent N] [--cleanup]
 vid2smplx render <output/clip> --layers final,global,hands,face
+vid2smplx excerpt <smplx_params.npz> --video <video.mp4> [--seconds 60] [--start S] [--overlay]
 vid2smplx doctor                 # env, weights, symlinks, submodule patches -> [OK]/[MISS] table
 vid2smplx setup                  # verify GVHMR is at the pinned fork commit (install.sh does this)
 vid2smplx download               # fetch weights, create symlinks (idempotent)

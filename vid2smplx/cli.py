@@ -717,6 +717,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help=f"comma list of: {','.join(VALID_LAYERS)}")
     d.add_argument("--video", default="", help="source video if gvhmr/ was cleaned up")
 
+    e = sub.add_parser("excerpt", help="render a short excerpt of a result over its video, from the npz alone")
+    e.add_argument("npz", help="a smplx_params.npz")
+    e.add_argument("--video", required=True, help="the video the npz was made from")
+    e.add_argument("--out", default="", help="default: <name>_excerpt.mp4 next to the npz")
+    e.add_argument("--seconds", type=float, default=60.0)
+    e.add_argument("--start", type=float, default=None,
+                   help="start in seconds (default: the window with the most arm and hand motion)")
+    e.add_argument("--overlay", action="store_true", help="mesh over the video instead of side by side")
+
     sub.add_parser("doctor", help="check environment, weights, symlinks and submodule patches")
     sub.add_parser("setup", help="verify the git submodule checkouts contain the changes vid2smplx needs")
     sub.add_parser("download", help="download weights and create submodule symlinks")
@@ -779,6 +788,18 @@ def cmd_render(args) -> None:
     sys.exit(conda_run(cmd, check=False).returncode)
 
 
+def cmd_excerpt(args) -> None:
+    npz = Path(args.npz)
+    out = args.out or str(npz.parent / f"{npz.parent.name}_excerpt.mp4")
+    cmd = ["python", str(SCRIPT_DIR / "render_excerpt.py"), "--npz", str(npz),
+           "--video", args.video, "--out", out, "--seconds", str(args.seconds)]
+    if args.start is not None:
+        cmd += ["--start", str(args.start)]
+    if args.overlay:
+        cmd.append("--overlay")
+    sys.exit(conda_run(cmd, check=False).returncode)
+
+
 def cmd_download() -> None:
     from .checks import make_links
     run(["bash", str(SCRIPT_DIR / "download_models.sh")])
@@ -835,6 +856,12 @@ def _main(argv: list[str] | None = None) -> None:
     if args.cmd == "render":
         validate_render_args(args, parser.error)
         cmd_render(args)
+        return
+    if args.cmd == "excerpt":
+        for f in (args.npz, args.video):
+            if not Path(f).is_file():
+                parser.error(f"not found: {f}")
+        cmd_excerpt(args)
         return
     validate_run_args(args, argv, parser.error)
     if not args.skip_doctor:

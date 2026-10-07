@@ -3,6 +3,7 @@
 ```
 vid2smplx run <video.mp4> [options]     video -> smplx_params.npz (+ renders)
 vid2smplx render <clip_dir> [options]   re-render layers of an existing output dir
+vid2smplx excerpt <npz> --video <mp4>   short excerpt from the npz alone, side by side or --overlay
 vid2smplx doctor                        check env, weights, symlinks
 vid2smplx download                      fetch weights, create symlinks
 ```

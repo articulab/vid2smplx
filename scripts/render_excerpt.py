@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Render a short excerpt at the highest-motion window: original | reconstruction.
+"""Render a short excerpt: original | reconstruction, or the mesh over the video.
 
-Motion score = per-frame joint-velocity magnitude over arms+hands (the parts that
-actually carry gesture), smoothed, then the best contiguous window is chosen.
+By default the window is the one with the most arm and hand motion (per-frame
+joint-velocity magnitude, smoothed). --start picks it by hand instead.
 
     python render_excerpt.py --npz clip/smplx_params.npz --video in.mp4 \
-                             --out excerpt.mp4 [--seconds 60] [--fps 30]
+                             --out excerpt.mp4 [--seconds 60] [--start 600] [--overlay]
 """
 import argparse
 import os
@@ -28,7 +28,11 @@ ap.add_argument("--out", required=True)
 ap.add_argument("--smplx_dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "models"),
                 help="folder holding smplx/SMPLX_NEUTRAL.npz (default: the repo's models/)")
 ap.add_argument("--seconds", type=float, default=60.0)
-ap.add_argument("--fps", type=float, default=30.0)
+ap.add_argument("--fps", type=float, default=None, help="default: the video's own frame rate")
+ap.add_argument("--start", type=float, default=None,
+                help="start of the excerpt in seconds (default: the highest-motion window)")
+ap.add_argument("--overlay", action="store_true",
+                help="draw the mesh over the video instead of side by side")
 ap.add_argument("--scale", type=float, default=0.5)
 ap.add_argument("--expand", type=float, default=0.0,
                 help="Widen the virtual camera by this fraction of frame size on each "
@@ -37,6 +41,9 @@ ap.add_argument("--expand", type=float, default=0.0,
 ap.add_argument("--no_crop", action="store_true",
                 help="Skip the crop-to-subject step and show the whole (expanded) frame.")
 args = ap.parse_args()
+if args.fps is None:
+    # the npz frame i is video frame i, so seconds must be counted at the video's rate
+    args.fps = cv2.VideoCapture(args.video).get(cv2.CAP_PROP_FPS) or 30.0
 
 z = np.load(args.npz, allow_pickle=True)
 L = int(z["num_frames"])
@@ -58,10 +65,15 @@ vel = vel * valid  # never score a window on frames the pipeline flagged bad
 
 k = np.ones(N) / N
 score = np.convolve(vel, k, mode="valid")
-start = int(np.argmax(score))
-print(f"[excerpt] {L} frames; best {N}-frame window at {start} "
-      f"({start/args.fps:.0f}s), motion={score[start]:.4f} vs mean={score.mean():.4f}",
-      flush=True)
+if args.start is not None:
+    start = min(max(0, int(round(args.start * args.fps))), L - N)
+    print(f"[excerpt] {L} frames; {N}-frame window at {start} ({start/args.fps:.1f}s, --start)",
+          flush=True)
+else:
+    start = int(np.argmax(score))
+    print(f"[excerpt] {L} frames; best {N}-frame window at {start} "
+          f"({start/args.fps:.0f}s), motion={score[start]:.4f} vs mean={score.mean():.4f}",
+          flush=True)
 
 # ---- set up renderer ---------------------------------------------------------
 K = z["K_fullimg"][0]
@@ -158,10 +170,15 @@ for n in range(N):
                                       smooth=True))
     sc.add(cam, pose=cam_pose)
     sc.add(pyrender.DirectionalLight(color=np.ones(3), intensity=3.0), pose=cam_pose)
-    col, _ = renderer.render(sc)
+    col, depth = renderer.render(sc)
     mesh_bgr = cv2.cvtColor(col[..., :3], cv2.COLOR_RGB2BGR)
 
-    strip = np.concatenate([og[sy0:sy1, sx0:sx1], mesh_bgr[sy0:sy1, sx0:sx1]], axis=1)
+    if args.overlay:
+        on = depth > 0                                  # pixels the mesh covers
+        og[on] = (0.3 * og[on] + 0.7 * mesh_bgr[on]).astype(np.uint8)
+        strip = og[sy0:sy1, sx0:sx1]
+    else:
+        strip = np.concatenate([og[sy0:sy1, sx0:sx1], mesh_bgr[sy0:sy1, sx0:sx1]], axis=1)
     cv2.imwrite(f"{fdir}/{n:05d}.png", strip)
 
 cap.release()

@@ -452,6 +452,24 @@ def test_render_validates_clip_dir(tmp_path):
     assert not errs
 
 
+def test_excerpt_command(tmp_path, monkeypatch):
+    """`vid2smplx excerpt` forwards its flags to render_excerpt.py and rejects missing inputs."""
+    from vid2smplx import cli
+    npz = tmp_path / "clip" / "smplx_params.npz"; npz.parent.mkdir(); npz.write_bytes(b"x")
+    vid = tmp_path / "v.mp4"; vid.write_bytes(b"x")
+    seen = {}
+    monkeypatch.setattr(cli, "conda_run", lambda cmd, check=False: seen.setdefault("cmd", cmd) and type("R", (), {"returncode": 0}))
+    with pytest.raises(SystemExit):
+        cli.main(["excerpt", str(npz), "--video", str(vid), "--start", "600", "--overlay"])
+    cmd = seen["cmd"]
+    assert cmd[1].endswith("render_excerpt.py") and "--overlay" in cmd
+    assert cmd[cmd.index("--start") + 1] == "600.0"
+    assert cmd[cmd.index("--out") + 1] == str(npz.parent / "clip_excerpt.mp4")
+
+    with pytest.raises(SystemExit):
+        cli.main(["excerpt", str(tmp_path / "nope.npz"), "--video", str(vid)])
+
+
 def test_render_layers_match_the_renderer():
     """cli choices and render.py must never drift apart."""
     from vid2smplx import VALID_LAYERS
